@@ -30,19 +30,16 @@ def main() -> None:
         "text": "A bomb exploded in a market",
         "image_desc": "people running, smoke",
         "perception_summary": "",
-        "memory": [],
         "similar_events": [],
         "evidence": "",
         "fusion_context": "",
-        "event_json": "",
+        "event": "",
         "verified": False,
-        "verdict": "",
         "issues": [],
-        "verifier_feedback": "",
         "repair_attempts": 0,
     }
     final = g.invoke(state)
-    print(final["event_json"])
+    print(final["event"])
 
 
 if __name__ == "__main__":

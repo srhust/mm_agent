@@ -28,7 +28,7 @@ def _msg_text(content: Any) -> str:
 
 
 def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
-    """只读 fusion_context，输出 event_json（单条 JSON 字符串）。"""
+    """只读 fusion_context，输出 event（单条 JSON 字符串）。"""
     fusion_context = str(state.get("fusion_context") or "").strip()
     if not fusion_context:
         fusion_context = "Context:\n(none)"
@@ -50,7 +50,7 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
 
     out = _get_llm().invoke([HumanMessage(content=prompt)])
     raw = _msg_text(out.content)
-    return {"event_json": raw}
+    return {"event": raw}
 
 
 run = extraction

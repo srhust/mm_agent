@@ -1,4 +1,4 @@
-"""校验：证据支撑 + 与 similar_events 结构一致；输出 verdict / issues JSON。"""
+"""校验：证据支撑 + 与 similar_events 结构一致；更新 verified 与 issues。"""
 
 from __future__ import annotations
 
@@ -64,9 +64,9 @@ def _normalize_verdict_payload(data: dict[str, Any]) -> tuple[str, list[str], bo
 
 
 def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
-    """依据 fusion_context 检查 event_json：证据支撑 + 与 [Similar Events] 模式一致。"""
+    """依据 fusion_context 检查 event：证据支撑 + 与 [Similar Events] 模式一致。"""
     fusion_context = str(state.get("fusion_context") or "").strip() or "(none)"
-    event = str(state.get("event_json") or "")
+    event = str(state.get("event") or "")
 
     prompt = (
         "You verify an extracted event JSON against the SAME fused context used at extraction time.\n\n"
@@ -78,7 +78,7 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         "Return ONLY one JSON object (no markdown), exactly this shape:\n"
         '{"verdict": "YES" or "NO", "issues": ["unsupported argument", "wrong event type", ...]}\n'
         "Use an empty issues array when verdict is YES.\n\n"
-        f"Context:\n{fusion_context}\n\nExtracted event JSON:\n{event}"
+        f"Context:\n{fusion_context}\n\nExtracted event:\n{event}"
     )
 
     raw = _msg_text(_get_llm().invoke([HumanMessage(content=prompt)]).content)
@@ -89,12 +89,9 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
     else:
         verdict, issues, verified = _normalize_verdict_payload(parsed)
 
-    payload = {"verdict": verdict, "issues": issues}
     return {
         "verified": verified,
-        "verdict": verdict,
         "issues": issues,
-        "verifier_feedback": json.dumps(payload, ensure_ascii=False),
     }
 
 

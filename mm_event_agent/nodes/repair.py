@@ -1,4 +1,4 @@
-"""校验未通过时最小化修补 event_json，并置 verified=True。"""
+"""校验未通过时最小化修补 event，并置 verified=True。"""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
     if state.get("verified"):
         return {}
 
-    event = str(state.get("event_json") or "")
+    event = str(state.get("event") or "")
     evidence = str(state.get("evidence") or "").strip() or "(none)"
     similar_block = _format_similar_events(state.get("similar_events"))
     issue_block = _format_issues(state.get("issues"))
@@ -81,7 +81,7 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
 
     attempts = int(state.get("repair_attempts") or 0) + 1
     return {
-        "event_json": raw.strip(),
+        "event": raw.strip(),
         "verified": True,
         "repair_attempts": attempts,
     }
