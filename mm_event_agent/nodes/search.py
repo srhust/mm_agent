@@ -17,15 +17,15 @@ def _get_ddg():
 
 
 def search(state: Mapping[str, Any]) -> dict[str, Any]:
-    """用 state["text"] 作为查询，写入 search_result。"""
+    """用 state["text"] 作为查询，写入 evidence（外部检索摘要）。"""
     q = str(state.get("text") or "").strip()
     if not q:
-        return {"search_result": ""}
+        return {"evidence": ""}
     try:
         out = _get_ddg().invoke(q)
-        return {"search_result": str(out) if out is not None else ""}
+        return {"evidence": str(out) if out is not None else ""}
     except Exception:
-        return {"search_result": ""}
+        return {"evidence": ""}
 
 
 run = search
