@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from mm_event_agent.runtime_config import settings
 from mm_event_agent.schemas import EvidenceItem, ValidationError, validate_evidence_item
 
 
@@ -21,12 +21,10 @@ class TavilySearchClient:
         timeout_seconds: float | None = None,
         max_results: int | None = None,
     ) -> None:
-        self.api_key = (api_key if api_key is not None else os.getenv("TAVILY_API_KEY", "")).strip()
-        self.endpoint = (
-            endpoint if endpoint is not None else os.getenv("MM_EVENT_TAVILY_ENDPOINT", "https://api.tavily.com/search")
-        ).strip()
-        self.timeout_seconds = timeout_seconds if timeout_seconds is not None else _env_float("MM_EVENT_SEARCH_TIMEOUT_SECONDS", 8.0)
-        self.max_results = max_results if max_results is not None else _env_int("MM_EVENT_SEARCH_MAX_RESULTS", 5)
+        self.api_key = (api_key if api_key is not None else settings.tavily_api_key).strip()
+        self.endpoint = (endpoint if endpoint is not None else settings.tavily_endpoint).strip()
+        self.timeout_seconds = timeout_seconds if timeout_seconds is not None else settings.search_timeout_seconds
+        self.max_results = max_results if max_results is not None else settings.search_max_results
 
     @property
     def configured(self) -> bool:
@@ -97,28 +95,6 @@ class TavilySearchClient:
             return validate_evidence_item(item)
         except ValidationError:
             return None
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        return default
-
-
 def search_news(query: str) -> list[EvidenceItem]:
     """Module-level helper for the default configured search adapter."""
     return TavilySearchClient().search(query)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from copy import deepcopy
@@ -19,6 +18,7 @@ from mm_event_agent.ontology import (
     is_supported_event_type,
 )
 from mm_event_agent.observability import log_node_event
+from mm_event_agent.runtime_config import settings
 from mm_event_agent.evidence.debug import summarize_evidence_sources
 from mm_event_agent.grounding.florence2_hf import apply_grounding_results_to_event
 from mm_event_agent.grounding.debug import compare_grounding_stages, summarize_grounding_activity
@@ -37,10 +37,16 @@ _llm: ChatOpenAI | None = None
 def _get_llm() -> ChatOpenAI:
     global _llm
     if _llm is None:
-        _llm = ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            temperature=0.1,
-        )
+        kwargs: dict[str, Any] = {
+            "model": settings.openai_model,
+            "temperature": 0.1,
+            "timeout": settings.openai_timeout_seconds,
+        }
+        if settings.openai_api_key:
+            kwargs["api_key"] = settings.openai_api_key
+        if settings.openai_base_url:
+            kwargs["base_url"] = settings.openai_base_url
+        _llm = ChatOpenAI(**kwargs)
     return _llm
 
 

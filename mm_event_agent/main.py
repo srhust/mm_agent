@@ -10,6 +10,7 @@ intermediate fallback until raw-image grounding is implemented.
 from __future__ import annotations
 
 import mm_event_agent.graph as graph
+from mm_event_agent.runtime_config import settings
 from mm_event_agent.schemas import empty_event, empty_fusion_context, empty_layered_similar_events
 from mm_event_agent.layered_rag import build_index
 
@@ -87,7 +88,7 @@ def main() -> None:
         # Data fields: raw user inputs plus current intermediate representations.
         "text": "A bomb exploded in a market",
         "raw_image": "example://images/market-scene.jpg",
-        "event_type_mode": "closed_set",
+        "event_type_mode": settings.event_type_mode,
         # image_desc is currently derived from raw_image outside this demo entry.
         "image_desc": "people running, smoke",
         "perception_summary": "",

@@ -17,11 +17,12 @@ import os
 from copy import deepcopy
 from typing import Any
 
+from mm_event_agent.runtime_config import settings
 from mm_event_agent.schemas import GroundingRequest, GroundingResult
 
 
-DEFAULT_FLORENCE2_MODEL_ID = "microsoft/Florence-2-base-ft"
-DEFAULT_FLORENCE2_TASK = "<OPEN_VOCABULARY_DETECTION>"
+DEFAULT_FLORENCE2_MODEL_ID = settings.florence2_model_id
+DEFAULT_FLORENCE2_TASK = settings.florence2_task
 
 
 def _failed_grounding_result(request: GroundingRequest, status: str = "failed") -> GroundingResult:
@@ -60,13 +61,13 @@ class Florence2HFGrounder:
 
     def __init__(
         self,
-        model_id: str = DEFAULT_FLORENCE2_MODEL_ID,
-        task_prompt: str = DEFAULT_FLORENCE2_TASK,
+        model_id: str | None = None,
+        task_prompt: str | None = None,
         device: str | None = None,
     ) -> None:
-        self.model_id = model_id
-        self.task_prompt = task_prompt
-        self.device = device
+        self.model_id = model_id or settings.florence2_model_id
+        self.task_prompt = task_prompt or settings.florence2_task
+        self.device = device or settings.florence2_device or None
         self._processor = None
         self._model = None
         self._torch = None
@@ -220,7 +221,7 @@ def execute_grounding_requests(
     raw_image: Any,
     grounding_requests: list[GroundingRequest],
     *,
-    model_id: str = DEFAULT_FLORENCE2_MODEL_ID,
+    model_id: str | None = None,
 ) -> list[GroundingResult]:
     """Convenience wrapper for one-off Florence-2 grounding execution."""
     grounder = Florence2HFGrounder(model_id=model_id)

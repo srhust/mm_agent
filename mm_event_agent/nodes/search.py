@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import os
 import re
 from typing import Any, Mapping
 
 import time
 
 from mm_event_agent.observability import log_node_event
+from mm_event_agent.runtime_config import settings
 from mm_event_agent.schemas import EvidenceItem, ValidationError, validate_evidence_item
 from mm_event_agent.search.tavily_client import search_news
 
@@ -112,19 +112,11 @@ def _passes_basic_relevance(item: EvidenceItem, query_text: str, source_text: st
 
 
 def _min_relevance_threshold() -> float:
-    raw = os.getenv("MM_EVENT_SEARCH_MIN_RELEVANCE", "0.18")
-    try:
-        return max(0.0, min(1.0, float(raw)))
-    except ValueError:
-        return 0.18
+    return settings.search_min_relevance
 
 
 def _top_k_limit() -> int:
-    raw = os.getenv("MM_EVENT_SEARCH_TOP_K", "3")
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return 3
+    return settings.search_top_k
 
 
 def _filter_and_rerank_evidence(evidence: list[EvidenceItem], query_text: str, source_text: str) -> list[EvidenceItem]:

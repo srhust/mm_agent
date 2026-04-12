@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
+import os
 import unittest
+import mm_event_agent.nodes.extraction as extraction_module
+import mm_event_agent.runtime_config as runtime_config
 from types import SimpleNamespace
 from unittest.mock import patch
-import mm_event_agent.nodes.extraction as extraction_module
 
 from mm_event_agent.graph import build_graph
 from mm_event_agent.evidence.debug import build_evidence_source_snapshot, summarize_evidence_sources
@@ -300,9 +303,9 @@ class SmokeTests(unittest.TestCase):
             )
 
         prompt = "\n".join(llm.prompts)
-        self.assertIn('"id": "bridge_attack_instrument_001"', prompt)
-        self.assertIn('"role": "Instrument"', prompt)
-        self.assertIn('"visual_cues": ["smoke", "flames"]', prompt)
+        self.assertIn("Bridge 1", prompt)
+        self.assertIn("role: Instrument", prompt)
+        self.assertIn("visual_cues: smoke, flames", prompt)
         self.assertIn("Use cross-modal bridge hints only as auxiliary semantic support.", prompt)
 
     def test_stage_a_still_respects_closed_set_and_transfer_modes(self) -> None:
@@ -607,7 +610,7 @@ class SmokeTests(unittest.TestCase):
     def test_search_node_top_k_filtering_keeps_best_ranked_evidence(self) -> None:
         state = make_state()
 
-        with patch("mm_event_agent.nodes.search.os.getenv", side_effect=lambda name, default=None: "2" if name == "MM_EVENT_SEARCH_TOP_K" else default), patch(
+        with patch("mm_event_agent.nodes.search.settings", replace(runtime_config.settings, search_top_k=2)), patch(
             "mm_event_agent.nodes.search.search_news",
             return_value=[
                 {
@@ -640,6 +643,81 @@ class SmokeTests(unittest.TestCase):
 
         self.assertEqual(len(result["evidence"]), 2)
         self.assertEqual([item["url"] for item in result["evidence"]], ["https://example.com/1", "https://example.com/2"])
+
+    def test_runtime_config_defaults(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            settings = runtime_config.load_settings()
+
+        self.assertEqual(settings.event_type_mode, "closed_set")
+        self.assertFalse(settings.debug)
+        self.assertEqual(settings.log_level, "INFO")
+        self.assertEqual(settings.openai_model, "gpt-4o-mini")
+        self.assertEqual(settings.tavily_endpoint, "https://api.tavily.com/search")
+        self.assertEqual(settings.search_top_k, 3)
+        self.assertEqual(settings.florence2_model_id, "microsoft/Florence-2-base-ft")
+
+    def test_runtime_config_override_via_env_vars(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "MM_EVENT_TYPE_MODE": "transfer",
+                "MM_EVENT_DEBUG": "true",
+                "MM_AGENT_LOG_LEVEL": "DEBUG",
+                "OPENAI_API_KEY": "sk-test",
+                "OPENAI_MODEL": "gpt-test",
+                "OPENAI_BASE_URL": "https://example.test/v1",
+                "OPENAI_TIMEOUT_SECONDS": "12",
+                "TAVILY_API_KEY": "tvly-test",
+                "MM_EVENT_TAVILY_ENDPOINT": "https://search.example.test",
+                "MM_EVENT_SEARCH_TIMEOUT_SECONDS": "5",
+                "MM_EVENT_SEARCH_MAX_RESULTS": "7",
+                "MM_EVENT_SEARCH_TOP_K": "2",
+                "MM_EVENT_SEARCH_MIN_RELEVANCE": "0.4",
+                "FLORENCE2_MODEL_ID": "florence-test",
+                "FLORENCE2_TASK": "<CAPTION>",
+                "FLORENCE2_DEVICE": "cpu",
+                "FLORENCE2_LOCAL_ENDPOINT": "http://localhost:9000",
+                "FLORENCE2_LOCAL_TIMEOUT_SECONDS": "15",
+            },
+            clear=True,
+        ):
+            settings = runtime_config.load_settings()
+
+        self.assertEqual(settings.event_type_mode, "transfer")
+        self.assertTrue(settings.debug)
+        self.assertEqual(settings.log_level, "DEBUG")
+        self.assertEqual(settings.openai_api_key, "sk-test")
+        self.assertEqual(settings.openai_model, "gpt-test")
+        self.assertEqual(settings.openai_base_url, "https://example.test/v1")
+        self.assertEqual(settings.openai_timeout_seconds, 12.0)
+        self.assertEqual(settings.tavily_api_key, "tvly-test")
+        self.assertEqual(settings.tavily_endpoint, "https://search.example.test")
+        self.assertEqual(settings.search_max_results, 7)
+        self.assertEqual(settings.search_top_k, 2)
+        self.assertEqual(settings.search_min_relevance, 0.4)
+        self.assertEqual(settings.florence2_model_id, "florence-test")
+        self.assertEqual(settings.florence2_task, "<CAPTION>")
+        self.assertEqual(settings.florence2_device, "cpu")
+        self.assertEqual(settings.florence2_local_endpoint, "http://localhost:9000")
+        self.assertEqual(settings.florence2_local_timeout_seconds, 15.0)
+
+    def test_missing_optional_config_remains_safe(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_MODEL": "gpt-test",
+            },
+            clear=True,
+        ):
+            settings = runtime_config.load_settings()
+
+        self.assertEqual(settings.openai_api_key, "")
+        self.assertEqual(settings.tavily_api_key, "")
+        self.assertEqual(settings.florence2_local_endpoint, "")
+        with patch("mm_event_agent.search.tavily_client.settings", settings):
+            client = TavilySearchClient()
+            self.assertFalse(client.configured)
+            self.assertEqual(client.search("market bombing"), [])
 
     def test_search_node_drops_obviously_irrelevant_results_when_possible(self) -> None:
         state = make_state()

@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from typing import Any, Mapping
+
+from mm_event_agent.runtime_config import settings
 
 
 _LOGGER = logging.getLogger("mm_event_agent")
 
 if not logging.getLogger().handlers:
-    logging.basicConfig(level=os.getenv("MM_AGENT_LOG_LEVEL", "INFO"))
+    logging.basicConfig(level=settings.log_level)
 
 
 def log_node_event(
