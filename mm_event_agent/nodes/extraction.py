@@ -19,7 +19,18 @@ from mm_event_agent.ontology import (
     get_supported_event_types,
 )
 from mm_event_agent.observability import log_node_event
-from mm_event_agent.schemas import empty_event, empty_fusion_context, enforce_strict_text_grounding, parse_event_json
+from mm_event_agent.grounding.debug import summarize_grounding_activity
+from mm_event_agent.schemas import (
+    build_grounding_requests,
+    empty_event,
+    empty_fusion_context,
+    enforce_strict_text_grounding,
+    parse_event_json,
+)
+from mm_event_agent.grounding.florence2_hf import (
+    apply_grounding_results_to_event,
+    execute_grounding_requests,
+)
 
 _llm: ChatOpenAI | None = None
 
@@ -221,6 +232,28 @@ def _run_staged_extraction(
     )
 
 
+def _maybe_run_grounding(
+    raw_image: Any,
+    event: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], bool, list[dict[str, Any]]]:
+    """Optionally ground unresolved image arguments against raw_image.
+
+    raw_image is the primary image input.
+    image_desc remains the current intermediate representation used earlier in
+    extraction; grounding here is an optional next-stage spatial layer.
+    """
+    grounding_requests = build_grounding_requests(event)
+    if not grounding_requests or raw_image is None:
+        return event, [], False, grounding_requests
+
+    try:
+        grounding_results = execute_grounding_requests(raw_image, grounding_requests)
+        grounded_event = apply_grounding_results_to_event(event, grounding_results)
+        return grounded_event, grounding_results, True, grounding_requests
+    except Exception:
+        return event, [], True, grounding_requests
+
+
 def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
     """Read fusion_context and write event using the current image_desc bridge."""
     started_at = time.perf_counter()
@@ -240,6 +273,7 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
 
     raw_text = str(fusion_context.get("raw_text") or "")
     raw_image_desc = str(fusion_context.get("raw_image_desc") or "")
+    raw_image = state.get("raw_image")
     perception_summary = str(fusion_context.get("perception_summary") or "")
     event_type_mode = str(state.get("event_type_mode") or "closed_set")
     patterns = fusion_context.get("patterns")
@@ -254,6 +288,10 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
         "stage_a_selected_event_type": "",
         "stage_a_selected_unsupported": False,
     }
+    grounding_attempted = False
+    grounding_results: list[dict[str, Any]] = []
+    grounding_requests: list[dict[str, Any]] = []
+    grounding_summary = summarize_grounding_activity([], [], [], [])
     try:
         assembled_event, stage_a_info = _run_staged_extraction(
             raw_text,
@@ -269,7 +307,15 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
                 parse_event_json(json.dumps(assembled_event, ensure_ascii=False)),
                 raw_text,
             )
-        result = {"event": event}
+        image_arguments_before = list(event.get("image_arguments")) if isinstance(event.get("image_arguments"), list) else []
+        event, grounding_results, grounding_attempted, grounding_requests = _maybe_run_grounding(raw_image, event)
+        grounding_summary = summarize_grounding_activity(
+            image_arguments_before=image_arguments_before,
+            grounding_requests=grounding_requests,
+            grounding_results=grounding_results,
+            image_arguments_after=event.get("image_arguments"),
+        )
+        result = {"event": event, "grounding_results": grounding_results}
         log_node_event(
             "extraction",
             state,
@@ -279,13 +325,19 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             event_type_mode=event_type_mode,
             stage_a_selected_event_type=stage_a_info["stage_a_selected_event_type"],
             stage_a_selected_unsupported=stage_a_info["stage_a_selected_unsupported"],
+            grounding_attempted=grounding_attempted,
+            grounding_unresolved_image_arguments=grounding_summary["unresolved_image_arguments"],
+            grounding_requests=grounding_summary["grounding_requests"],
+            grounding_results=grounding_summary["grounded_results"],
+            grounding_failed_results=grounding_summary["failed_grounding_results"],
+            grounding_applied_bboxes=grounding_summary["applied_grounded_bboxes"],
             staged=True,
             evidence_used=len(evidence_items),
         )
         return result
     except Exception as exc:
         fallback = empty_event()
-        result = {"event": fallback}
+        result = {"event": fallback, "grounding_results": grounding_results}
         log_node_event(
             "extraction",
             state,
@@ -295,6 +347,12 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             event_type_mode=event_type_mode,
             stage_a_selected_event_type=stage_a_info["stage_a_selected_event_type"],
             stage_a_selected_unsupported=stage_a_info["stage_a_selected_unsupported"],
+            grounding_attempted=grounding_attempted,
+            grounding_unresolved_image_arguments=grounding_summary["unresolved_image_arguments"],
+            grounding_requests=grounding_summary["grounding_requests"],
+            grounding_results=grounding_summary["grounded_results"],
+            grounding_failed_results=grounding_summary["failed_grounding_results"],
+            grounding_applied_bboxes=grounding_summary["applied_grounded_bboxes"],
             staged=True,
             evidence_used=len(evidence_items),
         )

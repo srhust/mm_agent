@@ -57,6 +57,14 @@ class GroundingResult(TypedDict):
     grounding_status: str
 
 
+class GroundingSummary(TypedDict):
+    unresolved_image_arguments: int
+    grounding_requests: int
+    grounded_results: int
+    failed_grounding_results: int
+    applied_grounded_bboxes: int
+
+
 class Event(TypedDict):
     event_type: str
     trigger: Trigger | None

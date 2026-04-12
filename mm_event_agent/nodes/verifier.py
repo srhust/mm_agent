@@ -18,6 +18,7 @@ from mm_event_agent.ontology import (
     is_supported_event_type,
 )
 from mm_event_agent.observability import log_node_event
+from mm_event_agent.grounding.debug import summarize_grounding_activity
 from mm_event_agent.schemas import (
     VerificationDiagnostic,
     empty_event,
@@ -349,9 +350,82 @@ def _validate_image_argument_fields(event: Mapping[str, Any]) -> tuple[list[str]
     return issues, diagnostics
 
 
+def _collect_grounding_support(
+    grounding_results: Any,
+) -> tuple[set[tuple[str, str]], set[tuple[str, str]], list[dict[str, Any]]]:
+    grounded_pairs: set[tuple[str, str]] = set()
+    failed_pairs: set[tuple[str, str]] = set()
+    normalized: list[dict[str, Any]] = []
+    if not isinstance(grounding_results, list):
+        return grounded_pairs, failed_pairs, normalized
+
+    for item in grounding_results:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        label = str(item.get("label") or "").strip()
+        status = str(item.get("grounding_status") or "").strip()
+        bbox = item.get("bbox")
+        normalized.append(item)
+        if not role or not label:
+            continue
+        pair = (role, label)
+        if status == "grounded" and isinstance(bbox, list) and len(bbox) == 4:
+            grounded_pairs.add(pair)
+        elif status == "failed":
+            failed_pairs.add(pair)
+    return grounded_pairs, failed_pairs, normalized
+
+
+def _validate_grounding_awareness(
+    event: Mapping[str, Any],
+    grounding_results: Any,
+) -> tuple[list[str], list[VerificationDiagnostic], int]:
+    """Apply conservative grounding-aware checks without penalizing failures."""
+    issues: list[str] = []
+    diagnostics: list[VerificationDiagnostic] = []
+    grounded_pairs, failed_pairs, _ = _collect_grounding_support(grounding_results)
+    image_arguments = event.get("image_arguments")
+    grounded_support_count = 0
+    if not isinstance(image_arguments, list):
+        return issues, diagnostics, grounded_support_count
+
+    for index, item in enumerate(image_arguments):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        label = str(item.get("label") or "").strip()
+        bbox = item.get("bbox")
+        grounding_status = str(item.get("grounding_status") or "").strip()
+        pair = (role, label)
+
+        if grounding_status == "grounded" and isinstance(bbox, list) and len(bbox) == 4:
+            grounded_support_count += 1
+            continue
+
+        if grounding_status == "unresolved" and pair in grounded_pairs:
+            issues.append(f"grounding result available but image argument remains unresolved at index {index}")
+            diagnostics.append(
+                {
+                    "field_path": f"image_arguments[{index}].grounding_status",
+                    "issue_type": "grounding_result_not_applied",
+                    "suggested_action": "upgrade_from_grounding",
+                }
+            )
+            continue
+
+        if grounding_status == "unresolved" and pair in failed_pairs:
+            # Grounding failure is informative but should not count against an
+            # otherwise acceptable unresolved image argument.
+            continue
+
+    return issues, diagnostics, grounded_support_count
+
+
 def _collect_field_level_issues(
     raw_event: Any,
     raw_text: str,
+    grounding_results: Any = None,
 ) -> tuple[list[str], list[VerificationDiagnostic]]:
     if not isinstance(raw_event, dict):
         return ["invalid event object"], [
@@ -367,14 +441,17 @@ def _collect_field_level_issues(
     trigger_issues, trigger_diagnostics = _validate_trigger_fields(raw_event, raw_text)
     text_issues, text_diagnostics = _validate_text_argument_fields(raw_event, raw_text)
     image_issues, image_diagnostics = _validate_image_argument_fields(raw_event)
+    grounding_issues, grounding_diagnostics, _ = _validate_grounding_awareness(raw_event, grounding_results)
     issues.extend(ontology_issues)
     issues.extend(trigger_issues)
     issues.extend(text_issues)
     issues.extend(image_issues)
+    issues.extend(grounding_issues)
     diagnostics.extend(ontology_diagnostics)
     diagnostics.extend(trigger_diagnostics)
     diagnostics.extend(text_diagnostics)
     diagnostics.extend(image_diagnostics)
+    diagnostics.extend(grounding_diagnostics)
     return issues, diagnostics
 
 
@@ -418,8 +495,16 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         )
     raw_text = str(fusion_context.get("raw_text") or "")
     raw_event = state.get("event")
+    grounding_results = state.get("grounding_results")
+    grounding_summary = summarize_grounding_activity(
+        image_arguments_before=raw_event.get("image_arguments") if isinstance(raw_event, dict) else [],
+        grounding_requests=None,
+        grounding_results=grounding_results,
+        image_arguments_after=raw_event.get("image_arguments") if isinstance(raw_event, dict) else [],
+    )
     raw_event_type = str(raw_event.get("event_type") or "").strip() if isinstance(raw_event, dict) else ""
-    field_issues, field_diagnostics = _collect_field_level_issues(raw_event, raw_text)
+    field_issues, field_diagnostics = _collect_field_level_issues(raw_event, raw_text, grounding_results)
+    _, _, grounded_support_count = _validate_grounding_awareness(raw_event, grounding_results)
     try:
         event = validate_event(raw_event)
     except Exception as exc:
@@ -459,6 +544,9 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         "Check quoted text and spans.\n"
         "3) Image support: Are event.image_arguments supported by fusion_context.raw_image_desc, the current derived representation of the primary raw image input? "
         'Unresolved image arguments are allowed only when grounding_status is "unresolved".\n'
+        "If an image argument is marked grounded and has a bbox, treat that as stronger image-side support.\n"
+        "If grounding_results contain a grounded match for a role/label pair, unresolved image arguments for that same pair may indicate an inconsistency.\n"
+        "If grounding_results show failed grounding, do not over-penalize otherwise acceptable unresolved image arguments.\n"
         "4) Evidence support: Are event claims supported by fusion_context.evidence item snippets when evidence items are available? "
         "Use evidence snippets as the primary factual basis for externally supported facts.\n"
         "5) Structure: Is the event schema valid, including trigger/text_arguments/image_arguments shape and types, and is it consistent with "
@@ -469,6 +557,7 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         "Use an empty issues array when verdict is YES. Confidence must be a float from 0 to 1. "
         "Reason must be a short explanation. diagnostics is optional but should be included when you can localize a field-level problem.\n\n"
         f"fusion_context:\n{json.dumps(fusion_context, ensure_ascii=False)}\n\n"
+        f"grounding_results:\n{json.dumps(grounding_results if isinstance(grounding_results, list) else [], ensure_ascii=False)}\n\n"
         f"Structured event:\n{json.dumps(event, ensure_ascii=False)}"
     )
 
@@ -513,6 +602,10 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
             success,
             verdict="YES" if verified else "NO",
             confidence=confidence,
+            grounded_support_count=grounded_support_count,
+            grounding_unresolved_image_arguments=grounding_summary["unresolved_image_arguments"],
+            grounding_results=grounding_summary["grounded_results"],
+            grounding_failed_results=grounding_summary["failed_grounding_results"],
         )
         return result
     except Exception as exc:
@@ -529,7 +622,19 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
             "verifier_confidence": 0.0,
             "verifier_reason": "verifier failure",
         }
-        log_node_event("verifier", state, started_at, False, error=str(exc), verdict="NO", confidence=0.0)
+        log_node_event(
+            "verifier",
+            state,
+            started_at,
+            False,
+            error=str(exc),
+            verdict="NO",
+            confidence=0.0,
+            grounded_support_count=grounded_support_count,
+            grounding_unresolved_image_arguments=grounding_summary["unresolved_image_arguments"],
+            grounding_results=grounding_summary["grounded_results"],
+            grounding_failed_results=grounding_summary["failed_grounding_results"],
+        )
         return result
 
 

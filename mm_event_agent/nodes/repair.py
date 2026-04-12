@@ -19,6 +19,8 @@ from mm_event_agent.ontology import (
     is_supported_event_type,
 )
 from mm_event_agent.observability import log_node_event
+from mm_event_agent.grounding.florence2_hf import apply_grounding_results_to_event
+from mm_event_agent.grounding.debug import compare_grounding_stages, summarize_grounding_activity
 from mm_event_agent.schemas import (
     empty_event,
     enforce_strict_text_grounding,
@@ -258,6 +260,94 @@ def _format_evidence_items(raw: Any) -> str:
     return "\n".join(lines) if lines else "(none)"
 
 
+def _format_grounding_results(raw: Any) -> str:
+    if not isinstance(raw, list) or not raw:
+        return "(none)"
+    lines: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            lines.append(json.dumps(item, ensure_ascii=False))
+        else:
+            lines.append(str(item))
+    return "\n".join(lines) if lines else "(none)"
+
+
+def _collect_grounded_pairs(raw: Any) -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    if not isinstance(raw, list):
+        return pairs
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        label = str(item.get("label") or "").strip()
+        bbox = item.get("bbox")
+        if role and label and isinstance(bbox, list) and len(bbox) == 4 and item.get("grounding_status") == "grounded":
+            pairs.add((role, label))
+    return pairs
+
+
+def _apply_targeted_grounding_alignment(
+    event: dict[str, Any],
+    grounding_results: Any,
+    repair_plan: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Apply known grounded results only to diagnosed image fields when useful."""
+    if not isinstance(grounding_results, list) or not grounding_results or not repair_plan:
+        return event
+
+    should_apply = False
+    for item in repair_plan:
+        field_path = item.get("field_path", "")
+        issue_type = item.get("issue_type", "")
+        if issue_type == "grounding_result_not_applied":
+            should_apply = True
+            break
+        if field_path.startswith("image_arguments["):
+            should_apply = True
+    if not should_apply:
+        return event
+
+    return apply_grounding_results_to_event(event, grounding_results)
+
+
+def _restore_grounded_bboxes_from_current_event(
+    original_event: dict[str, Any],
+    repaired_event: dict[str, Any],
+) -> dict[str, Any]:
+    """Preserve existing grounded bboxes unless repair explicitly changes them."""
+    original_items = original_event.get("image_arguments")
+    repaired_items = repaired_event.get("image_arguments")
+    if not isinstance(original_items, list) or not isinstance(repaired_items, list):
+        return repaired_event
+
+    restored = deepcopy(repaired_event)
+    restored_items = restored.get("image_arguments")
+    if not isinstance(restored_items, list):
+        return restored
+
+    for index, original_item in enumerate(original_items):
+        if index >= len(restored_items):
+            break
+        repaired_item = restored_items[index]
+        if not isinstance(original_item, dict) or not isinstance(repaired_item, dict):
+            continue
+        original_bbox = original_item.get("bbox")
+        original_status = original_item.get("grounding_status")
+        repaired_bbox = repaired_item.get("bbox")
+        repaired_status = repaired_item.get("grounding_status")
+        if (
+            isinstance(original_bbox, list)
+            and len(original_bbox) == 4
+            and original_status == "grounded"
+            and repaired_bbox is None
+            and repaired_status == "unresolved"
+        ):
+            repaired_item["bbox"] = list(original_bbox)
+            repaired_item["grounding_status"] = "grounded"
+    return restored
+
+
 def repair(state: Mapping[str, Any]) -> dict[str, Any]:
     """Read data + control context, write repaired event and repair_attempts only."""
     started_at = time.perf_counter()
@@ -271,9 +361,12 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         current_event = empty_event()
 
     evidence = _format_evidence_items(state.get("evidence"))
+    grounding_results = state.get("grounding_results")
+    grounding_results_block = _format_grounding_results(grounding_results)
     similar_block = _format_similar_events(state.get("similar_events"))
     issue_block = _format_issues(state.get("issues"))
     diagnostics_block = _format_diagnostics(state.get("verifier_diagnostics"))
+    verifier_reason = str(state.get("verifier_reason") or "").strip()
     repair_plan = _build_repair_plan(state.get("verifier_diagnostics"))
     repair_plan_block = _format_repair_plan(repair_plan)
     target_field_paths = _collect_target_field_paths(repair_plan)
@@ -302,6 +395,10 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         "- If only one field_path is diagnosed, keep every other field exactly as-is.\n"
         "- Fix ONLY what the verifier issues point to (wrong type, unsupported facts, bad structure).\n"
         "- For factual fixes, use External evidence; for shape/granularity, follow Similar events patterns.\n"
+        "- Use grounding_results for image-argument repair when they provide a matching grounded bbox.\n"
+        "- If verifier reports grounding_result_not_applied, prioritize aligning that image argument to the matching grounded result.\n"
+        "- If grounding failed, do not force deletion of an otherwise acceptable unresolved image argument.\n"
+        "- If a grounded bbox already exists, preserve it unless the diagnosed issue specifically requires changing it.\n"
         "- event_type must stay within the supported closed ontology.\n"
         "- text_arguments roles must be valid for the chosen event_type.\n"
         "- image_arguments roles must be valid for the chosen event_type.\n"
@@ -317,13 +414,20 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         f"Similar events (structural patterns):\n{similar_block}\n\n"
         f"Original text:\n{raw_text}\n\n"
         f"Verifier issues:\n{issue_block}\n\n"
+        f"Verifier reason:\n{verifier_reason or '(none)'}\n\n"
         f"Verifier diagnostics:\n{diagnostics_block}\n\n"
+        f"Grounding results:\n{grounding_results_block}\n\n"
         f"Repair plan:\n{repair_plan_block}\n\n"
         f"Target field paths:\n{target_field_summary}\n\n"
         f"Current event (JSON object):\n{json.dumps(current_event, ensure_ascii=False)}"
     )
 
     attempts = int(state.get("repair_attempts") or 0) + 1
+    grounding_debug = compare_grounding_stages(
+        current_event.get("image_arguments"),
+        grounding_results,
+        current_event.get("image_arguments"),
+    )
     try:
         raw = _msg_text(_get_llm().invoke([HumanMessage(content=prompt)]).content).strip()
         raw = re.sub(
@@ -340,6 +444,11 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             merged_candidate = _merge_targeted_event_fields(current_event, proposed_event, target_field_paths)
         except Exception:
             merged_candidate = _merge_targeted_event_fields(current_event, parsed_object, target_field_paths)
+        merged_candidate = _apply_targeted_grounding_alignment(
+            merged_candidate,
+            grounding_results,
+            repair_plan,
+        )
         repaired_event = enforce_strict_text_grounding(
             validate_event(
                 _finalize_targeted_text_grounding(
@@ -350,6 +459,13 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             ),
             raw_text,
         )
+        repaired_event = _restore_grounded_bboxes_from_current_event(current_event, repaired_event)
+        grounding_debug = compare_grounding_stages(
+            current_event.get("image_arguments"),
+            grounding_results,
+            repaired_event.get("image_arguments"),
+        )
+        grounding_summary = grounding_debug["summary"]
         result = {
             "event": repaired_event,
             "repair_attempts": attempts,
@@ -361,15 +477,38 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             True,
             repair_attempts=attempts,
             event_type=repaired_event["event_type"],
+            grounded_pairs=len(_collect_grounded_pairs(grounding_results)),
+            grounding_unresolved_image_arguments=grounding_summary["unresolved_image_arguments"],
+            grounding_results=grounding_summary["grounded_results"],
+            grounding_failed_results=grounding_summary["failed_grounding_results"],
+            grounding_applied_bboxes=grounding_summary["applied_grounded_bboxes"],
         )
         return result
     except Exception as exc:
         fallback_event = current_event
+        grounding_summary = summarize_grounding_activity(
+            image_arguments_before=current_event.get("image_arguments"),
+            grounding_requests=None,
+            grounding_results=grounding_results,
+            image_arguments_after=fallback_event.get("image_arguments"),
+        )
         result = {
             "event": fallback_event,
             "repair_attempts": attempts,
         }
-        log_node_event("repair", state, started_at, False, error=str(exc), repair_attempts=attempts)
+        log_node_event(
+            "repair",
+            state,
+            started_at,
+            False,
+            error=str(exc),
+            repair_attempts=attempts,
+            grounded_pairs=len(_collect_grounded_pairs(grounding_results)),
+            grounding_unresolved_image_arguments=grounding_summary["unresolved_image_arguments"],
+            grounding_results=grounding_summary["grounded_results"],
+            grounding_failed_results=grounding_summary["failed_grounding_results"],
+            grounding_applied_bboxes=grounding_summary["applied_grounded_bboxes"],
+        )
         return result
 
 

@@ -10,6 +10,7 @@ from mm_event_agent.grounding.florence2_hf import (
     apply_grounding_results_to_event,
     execute_grounding_requests,
 )
+from mm_event_agent.grounding.debug import compare_grounding_stages, summarize_grounding_activity
 from mm_event_agent.nodes.extraction import extraction
 from mm_event_agent.nodes.fusion import fusion
 from mm_event_agent.nodes.repair import repair
@@ -69,6 +70,7 @@ def make_state() -> dict:
         "evidence": [],
         "fusion_context": empty_fusion_context(),
         "event": empty_event(),
+        "grounding_results": [],
         "memory": [],
         "verified": False,
         "issues": [],
@@ -344,6 +346,167 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("trigger meaning inconsistent with event_type", result["issues"])
         self.assertTrue(any(x["issue_type"] == "semantic_trigger_mismatch" for x in result["verifier_diagnostics"]))
 
+    def test_verifier_accepts_grounded_image_arguments(self) -> None:
+        state = make_state()
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "image_arguments": [
+                {"role": "Place", "label": "market area", "bbox": [1.0, 2.0, 11.0, 12.0], "grounding_status": "grounded"}
+            ],
+        }
+        state["grounding_results"] = [
+            {
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "bbox": [1.0, 2.0, 11.0, 12.0],
+                "score": 0.88,
+                "grounding_status": "grounded",
+            }
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(
+                ['{"verdict":"YES","issues":[],"confidence":0.95,"reason":"grounded image support is consistent"}']
+            ),
+        ):
+            result = verifier(state)
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["issues"], [])
+
+    def test_grounding_results_strengthen_support_without_forcing_failure(self) -> None:
+        state = make_state()
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "image_arguments": [
+                {"role": "Place", "label": "market area", "bbox": [1.0, 2.0, 11.0, 12.0], "grounding_status": "grounded"}
+            ],
+        }
+        state["grounding_results"] = [
+            {
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "bbox": [1.0, 2.0, 11.0, 12.0],
+                "score": 0.88,
+                "grounding_status": "grounded",
+            }
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(
+                ['{"verdict":"YES","issues":[],"confidence":0.97,"reason":"grounding strengthens image support"}']
+            ),
+        ), patch("mm_event_agent.nodes.verifier.log_node_event") as mock_log:
+            result = verifier(state)
+
+        self.assertTrue(result["verified"])
+        self.assertTrue(mock_log.called)
+        _, kwargs = mock_log.call_args
+        self.assertEqual(kwargs["grounded_support_count"], 1)
+
+    def test_failed_grounding_does_not_invalidate_otherwise_acceptable_unresolved_image_arguments(self) -> None:
+        state = make_state()
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "image_arguments": [
+                {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}
+            ],
+        }
+        state["grounding_results"] = [
+            {
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "bbox": None,
+                "score": None,
+                "grounding_status": "failed",
+            }
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(
+                ['{"verdict":"YES","issues":[],"confidence":0.84,"reason":"failed grounding is non-fatal"}']
+            ),
+        ):
+            result = verifier(state)
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["issues"], [])
+
+    def test_verifier_can_flag_unresolved_argument_when_grounded_match_exists(self) -> None:
+        state = make_state()
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "image_arguments": [
+                {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}
+            ],
+        }
+        state["grounding_results"] = [
+            {
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "bbox": [1.0, 2.0, 11.0, 12.0],
+                "score": 0.9,
+                "grounding_status": "grounded",
+            }
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(
+                ['{"verdict":"YES","issues":[],"confidence":0.8,"reason":"looks okay"}']
+            ),
+        ):
+            result = verifier(state)
+
+        self.assertFalse(result["verified"])
+        self.assertIn("grounding result available but image argument remains unresolved at index 0", result["issues"])
+        self.assertTrue(
+            any(x["issue_type"] == "grounding_result_not_applied" for x in result["verifier_diagnostics"])
+        )
+
     def test_find_all_text_occurrences_returns_all_exact_matches(self) -> None:
         self.assertEqual(
             find_all_text_occurrences("market north market south", "market"),
@@ -585,6 +748,136 @@ class SmokeTests(unittest.TestCase):
         )
         self.assertIn("Modify ONLY the diagnosed fields listed in the repair plan.", prompt)
         self.assertIn("Preserve all other fields unchanged.", prompt)
+
+    def test_grounding_result_not_applied_leads_to_targeted_image_argument_repair(self) -> None:
+        state = make_state()
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": None,
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "image_arguments": [
+                {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}
+            ],
+        }
+        state["grounding_results"] = [
+            {
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "bbox": [5.0, 6.0, 20.0, 22.0],
+                "score": 0.8,
+                "grounding_status": "grounded",
+            }
+        ]
+        state["verifier_reason"] = "grounding result exists but was not applied"
+        state["verifier_diagnostics"] = [
+            {
+                "field_path": "image_arguments[0].grounding_status",
+                "issue_type": "grounding_result_not_applied",
+                "suggested_action": "upgrade_from_grounding",
+            }
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.repair._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack","trigger":null,"text_arguments":[{"role":"Place","text":"market","span":null}],"image_arguments":[{"role":"Place","label":"market area","bbox":null,"grounding_status":"unresolved"}]}'
+                ]
+            ),
+        ):
+            result = repair(state)
+
+        self.assertEqual(result["event"]["image_arguments"][0]["bbox"], [5.0, 6.0, 20.0, 22.0])
+        self.assertEqual(result["event"]["image_arguments"][0]["grounding_status"], "grounded")
+        self.assertEqual(result["event"]["text_arguments"], state["event"]["text_arguments"])
+        self.assertEqual(result["event"]["event_type"], state["event"]["event_type"])
+
+    def test_grounded_bbox_is_preserved_during_unrelated_repairs(self) -> None:
+        state = make_state()
+        state["text"] = "A bomb exploded in a market"
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 4}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "image_arguments": [
+                {"role": "Place", "label": "market area", "bbox": [5.0, 6.0, 20.0, 22.0], "grounding_status": "grounded"}
+            ],
+        }
+        state["grounding_results"] = [
+            {
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "bbox": [5.0, 6.0, 20.0, 22.0],
+                "score": 0.8,
+                "grounding_status": "grounded",
+            }
+        ]
+        state["verifier_reason"] = "trigger span mismatch only"
+        state["verifier_diagnostics"] = [
+            {"field_path": "trigger.span", "issue_type": "span_mismatch", "suggested_action": "realign_or_drop"}
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.repair._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack","trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[{"role":"Place","text":"changed","span":null}],"image_arguments":[{"role":"Place","label":"changed","bbox":null,"grounding_status":"unresolved"}]}'
+                ]
+            ),
+        ):
+            result = repair(state)
+
+        self.assertEqual(result["event"]["trigger"]["span"], {"start": 7, "end": 15})
+        self.assertEqual(result["event"]["image_arguments"][0]["bbox"], [5.0, 6.0, 20.0, 22.0])
+        self.assertEqual(result["event"]["image_arguments"][0]["grounding_status"], "grounded")
+        self.assertEqual(result["event"]["event_type"], state["event"]["event_type"])
+
+    def test_failed_grounding_does_not_force_dropping_otherwise_acceptable_unresolved_image_argument(self) -> None:
+        state = make_state()
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": None,
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "image_arguments": [
+                {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}
+            ],
+        }
+        state["grounding_results"] = [
+            {
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "bbox": None,
+                "score": None,
+                "grounding_status": "failed",
+            }
+        ]
+        state["verifier_reason"] = "grounding failed but unresolved image argument is still acceptable"
+        state["verifier_diagnostics"] = [
+            {
+                "field_path": "text_arguments[0].span",
+                "issue_type": "span_mismatch",
+                "suggested_action": "realign_or_drop",
+            }
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.repair._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack","trigger":null,"text_arguments":[{"role":"Place","text":"market","span":null}],"image_arguments":[]}'
+                ]
+            ),
+        ):
+            result = repair(state)
+
+        self.assertEqual(
+            result["event"]["image_arguments"][0],
+            {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"},
+        )
+        self.assertEqual(result["event"]["event_type"], state["event"]["event_type"])
 
     def test_extraction_rejects_unsupported_closed_set_event_type(self) -> None:
         state = make_state()
@@ -861,6 +1154,102 @@ class SmokeTests(unittest.TestCase):
             ],
         )
 
+    def test_extraction_successful_grounding_writes_bbox_back_into_event(self) -> None:
+        state = make_state()
+        state["raw_image"] = b"fake-image-bytes"
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack"}',
+                    '{"trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[{"role":"Place","text":"market","span":null}]}',
+                    '{"image_arguments":[{"role":"Place","label":"market area","bbox":null,"grounding_status":"unresolved"}]}',
+                ]
+            ),
+        ), patch(
+            "mm_event_agent.nodes.extraction.execute_grounding_requests",
+            return_value=[
+                {
+                    "role": "Place",
+                    "label": "market area",
+                    "grounding_query": "Place: market area",
+                    "bbox": [1.0, 2.0, 11.0, 12.0],
+                    "score": 0.88,
+                    "grounding_status": "grounded",
+                }
+            ],
+        ):
+            result = extraction(state)
+
+        self.assertEqual(result["event"]["image_arguments"][0]["bbox"], [1.0, 2.0, 11.0, 12.0])
+        self.assertEqual(result["event"]["image_arguments"][0]["grounding_status"], "grounded")
+        self.assertEqual(len(result["grounding_results"]), 1)
+
+    def test_extraction_failed_grounding_leaves_event_unchanged(self) -> None:
+        state = make_state()
+        state["raw_image"] = b"fake-image-bytes"
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack"}',
+                    '{"trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[{"role":"Place","text":"market","span":null}]}',
+                    '{"image_arguments":[{"role":"Place","label":"market area","bbox":null,"grounding_status":"unresolved"}]}',
+                ]
+            ),
+        ), patch(
+            "mm_event_agent.nodes.extraction.execute_grounding_requests",
+            side_effect=RuntimeError("grounding failed"),
+        ):
+            result = extraction(state)
+
+        self.assertIsNone(result["event"]["image_arguments"][0]["bbox"])
+        self.assertEqual(result["event"]["image_arguments"][0]["grounding_status"], "unresolved")
+        self.assertEqual(result["grounding_results"], [])
+
+    def test_extraction_skips_grounding_when_no_unresolved_image_arguments(self) -> None:
+        state = make_state()
+        state["raw_image"] = b"fake-image-bytes"
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack"}',
+                    '{"trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[{"role":"Place","text":"market","span":null}]}',
+                    '{"image_arguments":[{"role":"Place","label":"market area","bbox":[0,1,2,3],"grounding_status":"grounded"}]}',
+                ]
+            ),
+        ), patch("mm_event_agent.nodes.extraction.execute_grounding_requests") as mock_grounding:
+            result = extraction(state)
+
+        self.assertFalse(mock_grounding.called)
+        self.assertEqual(result["event"]["image_arguments"][0]["bbox"], [0.0, 1.0, 2.0, 3.0])
+        self.assertEqual(result["grounding_results"], [])
+
     def test_resolved_image_arguments_are_skipped_for_grounding_requests(self) -> None:
         event = {
             "event_type": "Conflict:Attack",
@@ -1031,6 +1420,147 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(updated["image_arguments"][0]["bbox"], [5.0, 6.0, 20.0, 22.0])
         self.assertEqual(updated["image_arguments"][0]["grounding_status"], "grounded")
         self.assertEqual(updated["image_arguments"][1], event["image_arguments"][1])
+
+    def test_grounding_summary_counts_are_correct(self) -> None:
+        before_image_arguments = [
+            {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"},
+            {"role": "Target", "label": "market stall", "bbox": None, "grounding_status": "unresolved"},
+        ]
+        grounding_requests = [
+            {"role": "Place", "label": "market area", "grounding_query": "Place: market area", "grounding_status": "unresolved"},
+            {"role": "Target", "label": "market stall", "grounding_query": "Target: market stall", "grounding_status": "unresolved"},
+        ]
+        grounding_results = [
+            {
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "bbox": [5.0, 6.0, 20.0, 22.0],
+                "score": 0.8,
+                "grounding_status": "grounded",
+            },
+            {
+                "role": "Target",
+                "label": "market stall",
+                "grounding_query": "Target: market stall",
+                "bbox": None,
+                "score": None,
+                "grounding_status": "failed",
+            },
+        ]
+        after_image_arguments = [
+            {"role": "Place", "label": "market area", "bbox": [5.0, 6.0, 20.0, 22.0], "grounding_status": "grounded"},
+            {"role": "Target", "label": "market stall", "bbox": None, "grounding_status": "unresolved"},
+        ]
+
+        summary = summarize_grounding_activity(
+            image_arguments_before=before_image_arguments,
+            grounding_requests=grounding_requests,
+            grounding_results=grounding_results,
+            image_arguments_after=after_image_arguments,
+        )
+
+        self.assertEqual(
+            summary,
+            {
+                "unresolved_image_arguments": 2,
+                "grounding_requests": 2,
+                "grounded_results": 1,
+                "failed_grounding_results": 1,
+                "applied_grounded_bboxes": 1,
+            },
+        )
+
+    def test_applied_grounding_count_is_correct(self) -> None:
+        summary = summarize_grounding_activity(
+            image_arguments_before=[
+                {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"},
+                {"role": "Target", "label": "market stall", "bbox": None, "grounding_status": "unresolved"},
+            ],
+            grounding_requests=[],
+            grounding_results=[
+                {
+                    "role": "Place",
+                    "label": "market area",
+                    "grounding_query": "Place: market area",
+                    "bbox": [1.0, 2.0, 3.0, 4.0],
+                    "score": 0.9,
+                    "grounding_status": "grounded",
+                }
+            ],
+            image_arguments_after=[
+                {"role": "Place", "label": "market area", "bbox": [1.0, 2.0, 3.0, 4.0], "grounding_status": "grounded"},
+                {"role": "Target", "label": "market stall", "bbox": None, "grounding_status": "unresolved"},
+            ],
+        )
+
+        self.assertEqual(summary["applied_grounded_bboxes"], 1)
+
+    def test_failed_grounding_is_reflected_in_summary(self) -> None:
+        summary = summarize_grounding_activity(
+            image_arguments_before=[
+                {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}
+            ],
+            grounding_requests=[
+                {"role": "Place", "label": "market area", "grounding_query": "Place: market area", "grounding_status": "unresolved"}
+            ],
+            grounding_results=[
+                {
+                    "role": "Place",
+                    "label": "market area",
+                    "grounding_query": "Place: market area",
+                    "bbox": None,
+                    "score": None,
+                    "grounding_status": "failed",
+                }
+            ],
+            image_arguments_after=[
+                {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}
+            ],
+        )
+
+        self.assertEqual(summary["failed_grounding_results"], 1)
+        self.assertEqual(summary["grounded_results"], 0)
+
+    def test_no_grounding_activity_produces_zeroed_summaries(self) -> None:
+        summary = summarize_grounding_activity([], [], [], [])
+
+        self.assertEqual(
+            summary,
+            {
+                "unresolved_image_arguments": 0,
+                "grounding_requests": 0,
+                "grounded_results": 0,
+                "failed_grounding_results": 0,
+                "applied_grounded_bboxes": 0,
+            },
+        )
+
+    def test_compare_grounding_stages_returns_eval_friendly_snapshot(self) -> None:
+        debug_snapshot = compare_grounding_stages(
+            image_arguments_before=[
+                {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}
+            ],
+            grounding_results=[
+                {
+                    "role": "Place",
+                    "label": "market area",
+                    "grounding_query": "Place: market area",
+                    "bbox": [5.0, 6.0, 20.0, 22.0],
+                    "score": 0.8,
+                    "grounding_status": "grounded",
+                }
+            ],
+            image_arguments_after=[
+                {"role": "Place", "label": "market area", "bbox": [5.0, 6.0, 20.0, 22.0], "grounding_status": "grounded"}
+            ],
+        )
+
+        self.assertIn("before_image_arguments", debug_snapshot)
+        self.assertIn("grounding_results", debug_snapshot)
+        self.assertIn("after_image_arguments", debug_snapshot)
+        self.assertIn("summary", debug_snapshot)
+        self.assertEqual(debug_snapshot["summary"]["applied_grounded_bboxes"], 1)
 
 
 if __name__ == "__main__":

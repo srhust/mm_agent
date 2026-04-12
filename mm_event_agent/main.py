@@ -47,6 +47,7 @@ def main() -> None:
         "evidence": [],
         "fusion_context": empty_fusion_context(),
         "event": empty_event(),
+        "grounding_results": [],
         "memory": [],
         # Control fields
         "verified": False,
