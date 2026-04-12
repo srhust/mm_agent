@@ -8,6 +8,7 @@ from mm_event_agent.graph import build_graph
 from mm_event_agent.nodes.extraction import extraction
 from mm_event_agent.nodes.fusion import fusion
 from mm_event_agent.nodes.search import search
+from mm_event_agent.nodes.verifier import verifier
 from mm_event_agent.schemas import empty_event, empty_fusion_context
 
 
@@ -49,7 +50,7 @@ class SmokeTests(unittest.TestCase):
         with patch(
             "mm_event_agent.nodes.rag._retrieve_similar_events",
             return_value=[
-                '{"event_type":"explosion","trigger":"exploded","arguments":{"location":"market"}}'
+                '{"event_type":"explosion","trigger":null,"text_arguments":[],"image_arguments":[]}'
             ],
         ), patch(
             "mm_event_agent.nodes.search._search_web",
@@ -64,7 +65,10 @@ class SmokeTests(unittest.TestCase):
         ), patch(
             "mm_event_agent.nodes.extraction._get_llm",
             return_value=FakeLLM(
-                ['{"event_type":"explosion","trigger":"exploded","arguments":{"location":"market"}}']
+                [
+                    '{"event_type":"explosion","trigger":{"text":"exploded","modality":"text","span":null},'
+                    '"text_arguments":[{"role":"location","text":"market","span":null}],"image_arguments":[]}'
+                ]
             ),
         ), patch(
             "mm_event_agent.nodes.verifier._get_llm",
@@ -76,6 +80,10 @@ class SmokeTests(unittest.TestCase):
 
         self.assertTrue(final["verified"])
         self.assertEqual(final["event"]["event_type"], "explosion")
+        self.assertEqual(final["event"]["trigger"]["text"], "exploded")
+        self.assertEqual(final["event"]["trigger"]["span"], [7, 15])
+        self.assertEqual(final["event"]["text_arguments"][0]["text"], "market")
+        self.assertEqual(final["event"]["text_arguments"][0]["span"], [21, 27])
         self.assertEqual(final["search_query"], "A bomb exploded in a market")
         self.assertEqual(len(final["evidence"]), 1)
 
@@ -108,6 +116,33 @@ class SmokeTests(unittest.TestCase):
 
         fused = fusion({**state, **search_result, "perception_summary": "summary"})
         self.assertEqual(fused["fusion_context"]["evidence"], [])
+
+    def test_verifier_flags_invalid_text_span(self) -> None:
+        state = make_state()
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+        state["event"] = {
+            "event_type": "explosion",
+            "trigger": {"text": "exploded", "modality": "text", "span": [0, 4]},
+            "text_arguments": [{"role": "location", "text": "market", "span": [21, 27]}],
+            "image_arguments": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(
+                ['{"verdict":"YES","issues":[],"confidence":0.8,"reason":"looks good"}']
+            ),
+        ):
+            result = verifier(state)
+
+        self.assertFalse(result["verified"])
+        self.assertIn("trigger text/span mismatch", result["issues"])
 
 
 if __name__ == "__main__":

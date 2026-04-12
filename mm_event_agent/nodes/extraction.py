@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 from mm_event_agent.observability import log_node_event
-from mm_event_agent.schemas import empty_event, empty_fusion_context, parse_event_json
+from mm_event_agent.schemas import attach_text_spans, empty_event, empty_fusion_context, parse_event_json
 
 _llm: ChatOpenAI | None = None
 
@@ -63,8 +63,13 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
     prompt = (
         "Extract exactly ONE structured event using ONLY the fusion_context below. "
         "Do not use or assume any information outside this block.\n\n"
-        "Output a single JSON object with keys: "
-        "event_type (string), trigger (string), arguments (object).\n\n"
+        "Output a single JSON object with exactly this structure:\n"
+        '{'
+        '"event_type": string, '
+        '"trigger": {"text": string, "modality": "text", "span": [start, end] | null} | null, '
+        '"text_arguments": [{"role": string, "text": string, "span": [start, end] | null}], '
+        '"image_arguments": [{"role": string, "label": string, "bbox": [x1, y1, x2, y2]}]'
+        '}\n\n'
         "Rules:\n"
         "1. Event facts must be grounded in evidence items when evidence is available.\n"
         "2. Event structure should follow similar_events patterns when patterns are available.\n"
@@ -72,7 +77,12 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
         "4. If patterns are empty, skip pattern guidance.\n"
         "5. If evidence is empty, rely on raw_text, raw_image_desc, and perception_summary only.\n"
         "6. Use raw_text and raw_image_desc as multimodal provenance; do not ignore either when they provide usable incident cues.\n"
-        "7. Ensure extraction still returns one valid JSON object even when patterns or evidence are empty.\n\n"
+        "7. trigger.text must be copied from raw_text when possible; do not paraphrase it.\n"
+        "8. Each text_arguments[i].text must be copied from raw_text when possible; do not paraphrase it.\n"
+        "9. For trigger and text arguments, set span to null in model output; spans will be computed after validation.\n"
+        "10. Image arguments must use role + label + bbox only.\n"
+        "11. If evidence is insufficient, prefer omission over hallucination.\n"
+        "12. Ensure extraction still returns one valid JSON object even when patterns or evidence are empty.\n\n"
         "Evidence format:\n"
         "- fusion_context.evidence is a list of evidence items.\n"
         "- Each item contains title, snippet, url, source_type, published_at, and score.\n"
@@ -89,7 +99,7 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
 
     try:
         out = _get_llm().invoke([HumanMessage(content=prompt)])
-        event = parse_event_json(_msg_text(out.content))
+        event = attach_text_spans(parse_event_json(_msg_text(out.content)), raw_text)
         result = {"event": event}
         log_node_event(
             "extraction",

@@ -12,7 +12,7 @@ from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 from mm_event_agent.observability import log_node_event
-from mm_event_agent.schemas import empty_event, parse_event_json, validate_event
+from mm_event_agent.schemas import attach_text_spans, empty_event, parse_event_json, validate_event
 
 _llm: ChatOpenAI | None = None
 
@@ -80,16 +80,22 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
     evidence = _format_evidence_items(state.get("evidence"))
     similar_block = _format_similar_events(state.get("similar_events"))
     issue_block = _format_issues(state.get("issues"))
+    raw_text = str(state.get("text") or "")
 
     prompt = (
         "Repair the extracted event JSON with MINIMAL changes.\n"
         "- Fix ONLY what the verifier issues point to (wrong type, unsupported facts, bad structure).\n"
-        "- Preserve correct fields and any correct subfields inside `arguments` unchanged; do not rewrite them.\n"
+        "- Preserve correct fields and any correct subfields unchanged; do not rewrite them.\n"
         "- For factual fixes, use External evidence; for shape/granularity, follow Similar events patterns.\n"
-        "- Output the COMPLETE JSON object (event_type, trigger, arguments object) after repair, not a patch or diff.\n"
+        "- Output the COMPLETE JSON object using this schema: event_type, trigger, text_arguments, image_arguments.\n"
+        '- trigger must be {"text": string, "modality": "text", "span": null} or null.\n'
+        '- text_arguments items must be {"role": string, "text": string, "span": null}.\n'
+        '- image_arguments items must be {"role": string, "label": string, "bbox": [x1, y1, x2, y2]}.\n'
+        "- Keep trigger.text and text_arguments[].text copied from the original text when possible; do not paraphrase.\n"
         "No markdown fences or commentary.\n\n"
         f"External evidence:\n{evidence}\n\n"
         f"Similar events (structural patterns):\n{similar_block}\n\n"
+        f"Original text:\n{raw_text}\n\n"
         f"Verifier issues:\n{issue_block}\n\n"
         f"Current event (JSON object):\n{json.dumps(current_event, ensure_ascii=False)}"
     )
@@ -103,7 +109,7 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             raw,
             flags=re.IGNORECASE | re.DOTALL,
         )
-        repaired_event = parse_event_json(raw)
+        repaired_event = attach_text_spans(parse_event_json(raw), raw_text)
         result = {
             "event": repaired_event,
             "repair_attempts": attempts,

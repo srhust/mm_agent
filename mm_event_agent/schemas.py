@@ -11,10 +11,34 @@ class ValidationError(ValueError):
     """Raised when a payload does not match the expected schema."""
 
 
+class TextSpan(TypedDict):
+    start: int
+    end: int
+
+
+class Trigger(TypedDict):
+    text: str
+    modality: str
+    span: list[int] | None
+
+
+class TextArgument(TypedDict):
+    role: str
+    text: str
+    span: list[int] | None
+
+
+class ImageArgument(TypedDict):
+    role: str
+    label: str
+    bbox: list[float]
+
+
 class Event(TypedDict):
     event_type: str
-    trigger: str
-    arguments: dict[str, Any]
+    trigger: Trigger | None
+    text_arguments: list[TextArgument]
+    image_arguments: list[ImageArgument]
 
 
 class EvidenceItem(TypedDict):
@@ -37,8 +61,9 @@ class FusionContext(TypedDict):
 def empty_event() -> Event:
     return {
         "event_type": "",
-        "trigger": "",
-        "arguments": {},
+        "trigger": None,
+        "text_arguments": [],
+        "image_arguments": [],
     }
 
 
@@ -77,19 +102,27 @@ def validate_event(data: Any) -> Event:
 
     event_type = data.get("event_type")
     trigger = data.get("trigger")
-    arguments = data.get("arguments")
+    text_arguments = data.get("text_arguments")
+    image_arguments = data.get("image_arguments")
 
     if not isinstance(event_type, str):
         raise ValidationError("event.event_type must be a string")
-    if not isinstance(trigger, str):
-        raise ValidationError("event.trigger must be a string")
-    if not isinstance(arguments, dict):
-        raise ValidationError("event.arguments must be an object")
+    if trigger is not None and not isinstance(trigger, dict):
+        raise ValidationError("event.trigger must be an object or null")
+    if not isinstance(text_arguments, list):
+        raise ValidationError("event.text_arguments must be a list")
+    if not isinstance(image_arguments, list):
+        raise ValidationError("event.image_arguments must be a list")
+
+    normalized_trigger = _validate_trigger(trigger)
+    normalized_text_arguments = [_validate_text_argument(item) for item in text_arguments]
+    normalized_image_arguments = [_validate_image_argument(item) for item in image_arguments]
 
     return {
         "event_type": event_type.strip(),
-        "trigger": trigger.strip(),
-        "arguments": arguments,
+        "trigger": normalized_trigger,
+        "text_arguments": normalized_text_arguments,
+        "image_arguments": normalized_image_arguments,
     }
 
 
@@ -98,6 +131,33 @@ def parse_event_json(text: str) -> Event:
     if data is None:
         raise ValidationError("event output is not valid JSON")
     return validate_event(data)
+
+
+def attach_text_spans(event: Event, raw_text: str) -> Event:
+    trigger = event["trigger"]
+    if trigger is not None:
+        trigger = {
+            "text": trigger["text"],
+            "modality": "text",
+            "span": find_text_span(raw_text, trigger["text"]),
+        }
+
+    text_arguments: list[TextArgument] = []
+    for item in event["text_arguments"]:
+        text_arguments.append(
+            {
+                "role": item["role"],
+                "text": item["text"],
+                "span": find_text_span(raw_text, item["text"]),
+            }
+        )
+
+    return {
+        "event_type": event["event_type"],
+        "trigger": trigger,
+        "text_arguments": text_arguments,
+        "image_arguments": event["image_arguments"],
+    }
 
 
 def validate_evidence_item(data: Any) -> EvidenceItem:
@@ -135,3 +195,84 @@ def validate_evidence_item(data: Any) -> EvidenceItem:
         "published_at": published_at.strip() if isinstance(published_at, str) and published_at.strip() else None,
         "score": max(0.0, min(1.0, score)),
     }
+
+
+def _validate_trigger(data: Any) -> Trigger | None:
+    if data is None:
+        return None
+    text = data.get("text")
+    modality = data.get("modality")
+    span = data.get("span")
+    if not isinstance(text, str):
+        raise ValidationError("event.trigger.text must be a string")
+    if modality != "text":
+        raise ValidationError('event.trigger.modality must be "text"')
+    return {
+        "text": text,
+        "modality": "text",
+        "span": _validate_span(span),
+    }
+
+
+def _validate_text_argument(data: Any) -> TextArgument:
+    if not isinstance(data, dict):
+        raise ValidationError("event.text_arguments items must be objects")
+    role = data.get("role")
+    text = data.get("text")
+    span = data.get("span")
+    if not isinstance(role, str) or not role.strip():
+        raise ValidationError("text argument role must be a non-empty string")
+    if not isinstance(text, str) or not text.strip():
+        raise ValidationError("text argument text must be a non-empty string")
+    return {
+        "role": role.strip(),
+        "text": text,
+        "span": _validate_span(span),
+    }
+
+
+def _validate_image_argument(data: Any) -> ImageArgument:
+    if not isinstance(data, dict):
+        raise ValidationError("event.image_arguments items must be objects")
+    role = data.get("role")
+    label = data.get("label")
+    bbox = data.get("bbox")
+    if not isinstance(role, str) or not role.strip():
+        raise ValidationError("image argument role must be a non-empty string")
+    if not isinstance(label, str) or not label.strip():
+        raise ValidationError("image argument label must be a non-empty string")
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        raise ValidationError("image argument bbox must be a list of four numbers")
+    norm_bbox: list[float] = []
+    for value in bbox:
+        try:
+            norm_bbox.append(float(value))
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("image argument bbox values must be numeric") from exc
+    return {
+        "role": role.strip(),
+        "label": label.strip(),
+        "bbox": norm_bbox,
+    }
+
+
+def _validate_span(span: Any) -> list[int] | None:
+    if span is None:
+        return None
+    if not isinstance(span, list) or len(span) != 2:
+        raise ValidationError("span must be null or [start, end]")
+    start, end = span
+    if not isinstance(start, int) or not isinstance(end, int) or start < 0 or end < start:
+        raise ValidationError("span values must be valid non-negative integers")
+    return [start, end]
+
+
+def find_text_span(source_text: str, value: str) -> list[int] | None:
+    source = str(source_text or "")
+    target = str(value or "")
+    if not source or not target:
+        return None
+    start = source.find(target)
+    if start < 0:
+        return None
+    return [start, start + len(target)]

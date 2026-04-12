@@ -55,6 +55,104 @@ def _normalize_verdict_payload(data: dict[str, Any]) -> tuple[str, list[str], bo
     return verdict, issues, verified, confidence, reason
 
 
+def _is_valid_span(span: Any, source_text: str) -> bool:
+    if not isinstance(span, list) or len(span) != 2:
+        return False
+    start, end = span
+    if not isinstance(start, int) or not isinstance(end, int):
+        return False
+    if start < 0 or end < start or end > len(source_text):
+        return False
+    return True
+
+
+def _validate_trigger_fields(event: Mapping[str, Any], raw_text: str) -> list[str]:
+    issues: list[str] = []
+    trigger = event.get("trigger")
+    if trigger is None:
+        return issues
+    if not isinstance(trigger, dict):
+        return ["invalid trigger object"]
+
+    if trigger.get("modality") != "text":
+        issues.append("invalid trigger modality")
+
+    span = trigger.get("span")
+    text = str(trigger.get("text") or "")
+    if span is not None:
+        if not _is_valid_span(span, raw_text):
+            issues.append("invalid trigger span")
+        elif raw_text[span[0] : span[1]] != text:
+            issues.append("trigger text/span mismatch")
+    return issues
+
+
+def _validate_text_argument_fields(event: Mapping[str, Any], raw_text: str) -> list[str]:
+    issues: list[str] = []
+    text_arguments = event.get("text_arguments")
+    if not isinstance(text_arguments, list):
+        return ["invalid text_arguments list"]
+
+    for index, item in enumerate(text_arguments):
+        if not isinstance(item, dict):
+            issues.append(f"invalid text argument object at index {index}")
+            continue
+        span = item.get("span")
+        text = str(item.get("text") or "")
+        if span is not None:
+            if not _is_valid_span(span, raw_text):
+                issues.append(f"invalid text argument span at index {index}")
+            elif raw_text[span[0] : span[1]] != text:
+                issues.append(f"text argument span mismatch at index {index}")
+    return issues
+
+
+def _validate_image_argument_fields(event: Mapping[str, Any]) -> list[str]:
+    issues: list[str] = []
+    image_arguments = event.get("image_arguments")
+    if not isinstance(image_arguments, list):
+        return ["invalid image_arguments list"]
+
+    for index, item in enumerate(image_arguments):
+        if not isinstance(item, dict):
+            issues.append(f"invalid image argument object at index {index}")
+            continue
+        role = item.get("role")
+        label = item.get("label")
+        bbox = item.get("bbox")
+        if not isinstance(role, str) or not role.strip():
+            issues.append(f"invalid image argument role at index {index}")
+        if not isinstance(label, str) or not label.strip():
+            issues.append(f"invalid image argument label at index {index}")
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            issues.append(f"invalid image argument bbox format at index {index}")
+            continue
+        for value in bbox:
+            if not isinstance(value, (int, float)):
+                issues.append(f"invalid image argument bbox format at index {index}")
+                break
+    return issues
+
+
+def _collect_field_level_issues(raw_event: Any, raw_text: str) -> list[str]:
+    if not isinstance(raw_event, dict):
+        return ["invalid event object"]
+    issues: list[str] = []
+    issues.extend(_validate_trigger_fields(raw_event, raw_text))
+    issues.extend(_validate_text_argument_fields(raw_event, raw_text))
+    issues.extend(_validate_image_argument_fields(raw_event))
+    return issues
+
+
+def _merge_issues(field_issues: list[str], llm_issues: list[str]) -> list[str]:
+    merged: list[str] = []
+    for issue in field_issues + llm_issues:
+        text = str(issue).strip()
+        if text and text not in merged:
+            merged.append(text)
+    return merged
+
+
 def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
     """Read data fields and write only control fields verified/issues/confidence/reason."""
     started_at = time.perf_counter()
@@ -70,19 +168,24 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
                 "evidence": list(state.get("evidence")) if isinstance(state.get("evidence"), list) else [],
             }
         )
+    raw_text = str(fusion_context.get("raw_text") or "")
+    raw_event = state.get("event")
+    field_issues = _collect_field_level_issues(raw_event, raw_text)
     try:
-        event = validate_event(state.get("event"))
-    except Exception:
+        event = validate_event(raw_event)
+    except Exception as exc:
+        field_issues.append(str(exc))
         event = empty_event()
 
     prompt = (
         "You verify an extracted event JSON against the SAME structured fusion_context used at extraction time.\n\n"
         "Checks:\n"
-        "1) Text support: Are event claims supported by fusion_context.raw_text?\n"
-        "2) Image support: Are event claims supported by fusion_context.raw_image_desc?\n"
+        "1) Text support: Are event.trigger.text and event.text_arguments supported by fusion_context.raw_text? "
+        "Check quoted text and spans.\n"
+        "2) Image support: Are event.image_arguments supported by fusion_context.raw_image_desc?\n"
         "3) Evidence support: Are event claims supported by fusion_context.evidence item snippets when evidence items are available? "
         "Use evidence snippets as the primary factual basis for externally supported facts.\n"
-        "4) Structure: Is the event (event_type, trigger, arguments shape/granularity) consistent with "
+        "4) Structure: Is the event schema valid, including trigger/text_arguments/image_arguments shape and types, and is it consistent with "
         "fusion_context.patterns when patterns are available?\n"
         "5) If text, image, and evidence conflict with patterns, prefer grounded support over patterns.\n\n"
         "Return ONLY one JSON object (no markdown), exactly this shape:\n"
@@ -97,14 +200,18 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         raw = _msg_text(_get_llm().invoke([HumanMessage(content=prompt)]).content)
         parsed = extract_json_object(raw)
         if parsed is None:
-            issues = ["invalid verifier output (not valid JSON object)"]
+            issues = _merge_issues(field_issues, ["invalid verifier output (not valid JSON object)"])
             verified = False
             confidence = 0.0
             reason = "invalid verifier output"
             success = False
         else:
-            _, issues, verified, confidence, reason = _normalize_verdict_payload(parsed)
+            _, llm_issues, llm_verified, confidence, reason = _normalize_verdict_payload(parsed)
+            issues = _merge_issues(field_issues, llm_issues)
+            verified = llm_verified and not issues
             success = True
+            if issues and not reason:
+                reason = "field-level or evidence-aware verification failed"
         result = {
             "verified": verified,
             "issues": issues,
