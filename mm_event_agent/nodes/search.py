@@ -1,7 +1,8 @@
-"""DuckDuckGo 检索（LangChain DuckDuckGoSearchRun）。"""
+"""Data node: external search writes evidence."""
 
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 _ddg = None
@@ -16,16 +17,38 @@ def _get_ddg():
     return _ddg
 
 
+def _to_evidence_items(raw: Any) -> list[dict[str, str]]:
+    text = "" if raw is None else str(raw).strip()
+    if not text:
+        return []
+
+    chunks = [chunk.strip() for chunk in re.split(r"\n\s*\n+", text) if chunk.strip()]
+    if not chunks:
+        chunks = [text]
+
+    items: list[dict[str, str]] = []
+    for chunk in chunks[:5]:
+        items.append(
+            {
+                "title": "",
+                "snippet": chunk,
+                "url": "",
+                "source_type": "search",
+            }
+        )
+    return items
+
+
 def search(state: Mapping[str, Any]) -> dict[str, Any]:
-    """用 state["text"] 作为查询，写入 evidence（外部检索摘要）。"""
+    """Read only data field text and write only data field evidence."""
     q = str(state.get("text") or "").strip()
     if not q:
-        return {"evidence": ""}
+        return {"evidence": []}
     try:
         out = _get_ddg().invoke(q)
-        return {"evidence": str(out) if out is not None else ""}
+        return {"evidence": _to_evidence_items(out)}
     except Exception:
-        return {"evidence": ""}
+        return {"evidence": []}
 
 
 run = search

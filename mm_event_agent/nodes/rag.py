@@ -1,4 +1,4 @@
-"""本地 RAG：FAISS + 向量检索，返回结构化相似事件（无 LLM）。"""
+"""Data node: local RAG returns structured similar_events."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def _parse_retrieved_doc(doc: str) -> dict[str, Any]:
 
 
 def rag(state: Mapping[str, Any]) -> dict[str, Any]:
-    """以 state["text"] 为 query，FAISS 检索 top-3，解析为 similar_events。"""
+    """Read only data field text and write only data field similar_events."""
     q = str(state.get("text") or "").strip()
     if not q:
         return {"similar_events": []}

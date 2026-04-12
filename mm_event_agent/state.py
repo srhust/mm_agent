@@ -1,4 +1,4 @@
-"""LangGraph 全局状态定义。"""
+"""LangGraph global state definition."""
 
 from __future__ import annotations
 
@@ -6,21 +6,24 @@ from typing import Any, TypedDict
 
 
 class AgentState(TypedDict):
-    """多模态事件抽取 agent 的状态。
+    """State for the multimodal event extraction agent.
 
-    核心字段（业务输入/输出）：text, image_desc, perception_summary, similar_events,
-    evidence, fusion_context, event, verified。
-
-    issues / repair_attempts：校验与修复环使用，保证图可运行（与既有逻辑一致）。
+    Keep data fields and control fields separate across nodes.
     """
 
+    # Data fields: business input, intermediate context, and final output.
     text: str
     image_desc: str
     perception_summary: str
     similar_events: list[dict[str, Any]]
-    evidence: str
-    fusion_context: str
+    evidence: list[dict[str, str]]
+    fusion_context: dict[str, Any]
     event: str
+    memory: list[Any]
+
+    # Control fields: verifier/repair loop only.
     verified: bool
     issues: list[str]
+    verifier_confidence: float
+    verifier_reason: str
     repair_attempts: int

@@ -1,4 +1,4 @@
-"""输入理解与预处理：合并文本与图像描述到 perception_summary。"""
+"""Data node: merge text and image description into perception_summary."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from typing import Any, Mapping
 
 
 def perception(state: Mapping[str, Any]) -> dict[str, Any]:
-    """不修改 text / image_desc，仅写入 perception_summary。"""
+    """Read data fields text/image_desc and write data field perception_summary."""
     text = "" if state.get("text") is None else str(state.get("text"))
     image_desc = "" if state.get("image_desc") is None else str(state.get("image_desc"))
     perception_summary = f"Text: {text}\nImage: {image_desc}"
