@@ -6,7 +6,7 @@ import time
 from typing import Any, Mapping
 
 from mm_event_agent.observability import log_node_event
-from mm_event_agent.schemas import FusionContext, empty_fusion_context
+from mm_event_agent.schemas import FusionContext, empty_fusion_context, empty_layered_similar_events
 
 
 def fusion(state: Mapping[str, Any]) -> dict[str, Any]:
@@ -14,13 +14,14 @@ def fusion(state: Mapping[str, Any]) -> dict[str, Any]:
     started_at = time.perf_counter()
     try:
         evidence = state.get("evidence")
+        raw_patterns = state.get("similar_events")
         fusion_context: FusionContext = {
             "raw_text": str(state.get("text") or ""),
             # Keep using the derived image description in fusion_context until
             # raw_image-grounded perception is implemented.
             "raw_image_desc": str(state.get("image_desc") or ""),
             "perception_summary": str(state.get("perception_summary") or ""),
-            "patterns": list(state.get("similar_events")) if isinstance(state.get("similar_events"), list) else [],
+            "patterns": raw_patterns if isinstance(raw_patterns, dict) else empty_layered_similar_events(),
             "evidence": list(evidence) if isinstance(evidence, list) else [],
         }
         result = {"fusion_context": fusion_context}
@@ -29,7 +30,11 @@ def fusion(state: Mapping[str, Any]) -> dict[str, Any]:
             state,
             started_at,
             True,
-            fusion_patterns=len(fusion_context["patterns"]),
+            fusion_patterns=(
+                len(fusion_context["patterns"]["text_event_examples"])
+                + len(fusion_context["patterns"]["image_semantic_examples"])
+                + len(fusion_context["patterns"]["bridge_examples"])
+            ),
             returned_evidence=len(fusion_context["evidence"]),
         )
         return result

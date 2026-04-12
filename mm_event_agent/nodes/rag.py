@@ -1,68 +1,62 @@
-"""Data node: local RAG returns structured similar_events."""
+"""Data node: layered local RAG returns structured retrieval sources."""
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any, Mapping
 
 from mm_event_agent.observability import log_node_event
+from mm_event_agent.schemas import LayeredSimilarEvents, empty_layered_similar_events
 
 
-def _retrieve_similar_events(query: str, top_k: int = 3) -> list[str]:
-    from mm_event_agent.vector_store import retrieve as vector_retrieve
+def _retrieve_similar_events(raw_text: str, image_desc: str = "", event_type: str = "", top_k: int = 3) -> LayeredSimilarEvents:
+    from mm_event_agent.layered_rag import retrieve as layered_retrieve
 
-    return vector_retrieve(query, top_k=top_k)
-
-
-def _arguments_to_list(raw: Any) -> list[str]:
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        return [str(x) for x in raw]
-    if isinstance(raw, dict):
-        return [f"{k}: {v}" for k, v in raw.items()]
-    return [str(raw)]
-
-
-def _normalize_event(obj: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "event_type": str(obj.get("event_type") or ""),
-        "trigger": str(obj.get("trigger") or ""),
-        "arguments": _arguments_to_list(obj.get("arguments")),
-    }
-
-
-def _parse_retrieved_doc(doc: str) -> dict[str, Any]:
-    text = doc.strip()
-    if not text:
-        return {"event_type": "", "trigger": "", "arguments": []}
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            return _normalize_event(data)
-    except json.JSONDecodeError:
-        pass
-    return {"event_type": "", "trigger": text[:500], "arguments": []}
+    return layered_retrieve(raw_text=raw_text, image_desc=image_desc, event_type=event_type, top_k=top_k)
 
 
 def rag(state: Mapping[str, Any]) -> dict[str, Any]:
     """Read only data field text and write only data field similar_events."""
     started_at = time.perf_counter()
-    q = str(state.get("text") or "").strip()
-    if not q:
-        result = {"similar_events": []}
-        log_node_event("local_rag", state, started_at, True, patterns=0)
+    raw_text = str(state.get("text") or "").strip()
+    image_desc = str(state.get("image_desc") or "").strip()
+    event_type = str(state.get("event", {}).get("event_type") or "").strip() if isinstance(state.get("event"), dict) else ""
+    if not raw_text and not image_desc and not event_type:
+        result = {"similar_events": empty_layered_similar_events()}
+        log_node_event("local_rag", state, started_at, True, patterns=0, text_examples=0, image_examples=0, bridge_examples=0)
         return result
     try:
-        raw_docs = _retrieve_similar_events(q, top_k=3)
-        similar_events = [_parse_retrieved_doc(d) for d in raw_docs]
+        similar_events = _retrieve_similar_events(raw_text=raw_text, image_desc=image_desc, event_type=event_type, top_k=3)
+        total = (
+            len(similar_events["text_event_examples"])
+            + len(similar_events["image_semantic_examples"])
+            + len(similar_events["bridge_examples"])
+        )
         result = {"similar_events": similar_events}
-        log_node_event("local_rag", state, started_at, True, patterns=len(similar_events))
+        log_node_event(
+            "local_rag",
+            state,
+            started_at,
+            True,
+            patterns=total,
+            text_examples=len(similar_events["text_event_examples"]),
+            image_examples=len(similar_events["image_semantic_examples"]),
+            bridge_examples=len(similar_events["bridge_examples"]),
+        )
         return result
     except Exception as exc:
-        log_node_event("local_rag", state, started_at, False, error=str(exc), patterns=0)
-        return {"similar_events": []}
+        log_node_event(
+            "local_rag",
+            state,
+            started_at,
+            False,
+            error=str(exc),
+            patterns=0,
+            text_examples=0,
+            image_examples=0,
+            bridge_examples=0,
+        )
+        return {"similar_events": empty_layered_similar_events()}
 
 
 run = rag

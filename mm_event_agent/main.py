@@ -10,24 +10,73 @@ intermediate fallback until raw-image grounding is implemented.
 from __future__ import annotations
 
 import mm_event_agent.graph as graph
-from mm_event_agent.schemas import empty_event, empty_fusion_context
-from mm_event_agent.vector_store import build_index
+from mm_event_agent.schemas import empty_event, empty_fusion_context, empty_layered_similar_events
+from mm_event_agent.layered_rag import build_index
 
-# Local RAG corpus: similar-event patterns / few-shot examples, not current news facts.
-RAG_EVENT_CORPUS = [
-    (
-        '{"event_type":"Conflict:Attack","trigger":"detonated",'
-        '"arguments":{"Place":"public market","Instrument":"improvised explosive device","Target":"market"}}'
-    ),
-    (
-        '{"event_type":"Life:Die","trigger":"killed",'
-        '"arguments":{"Victim":"civilian","Place":"residential building","Instrument":"fire"}}'
-    ),
-    (
-        "Pattern: conflict attack reports often include Attacker, Target, Instrument, and Place; "
-        "death reports often include Victim, Agent or Instrument, and Place."
-    ),
-]
+# Local layered RAG corpora: heterogeneous retrieval sources, kept separate.
+RAG_EVENT_CORPUS = {
+    "text_event_examples": [
+        {
+            "id": "ace_000123",
+            "source_dataset": "ACE2005",
+            "modality": "text",
+            "event_type": "Conflict:Attack",
+            "raw_text": "A bomb exploded in a crowded market, killing several civilians.",
+            "trigger": {"text": "exploded", "span": {"start": 7, "end": 16}},
+            "text_arguments": [
+                {"role": "Instrument", "text": "bomb", "span": {"start": 2, "end": 6}},
+                {"role": "Place", "text": "a crowded market", "span": {"start": 20, "end": 36}},
+                {"role": "Target", "text": "civilians", "span": {"start": 53, "end": 62}},
+            ],
+            "pattern_summary": "Attack reports often mention trigger, place, instrument, and target.",
+            "retrieval_text": "Conflict:Attack exploded bomb crowded market civilians Instrument Place Target",
+        },
+        {
+            "id": "maven_arg_000001",
+            "source_dataset": "MAVEN-ARG",
+            "modality": "text",
+            "event_type": "Life:Die",
+            "raw_text": "A civilian was killed in a residential building fire.",
+            "trigger": {"text": "killed", "span": {"start": 16, "end": 22}},
+            "text_arguments": [
+                {"role": "Victim", "text": "civilian", "span": {"start": 2, "end": 10}},
+                {"role": "Place", "text": "a residential building", "span": {"start": 26, "end": 48}},
+            ],
+            "pattern_summary": "Death reports emphasize victim, cause or instrument, and place.",
+            "retrieval_text": "Life:Die killed civilian residential building fire Victim Place Instrument",
+        },
+    ],
+    "image_semantic_examples": [
+        {
+            "id": "swig_000456",
+            "source_dataset": "SWiG",
+            "modality": "image_semantics",
+            "event_type": "Conflict:Attack",
+            "image_desc": "Smoke rises from damaged vehicles near a burning building on a city street.",
+            "visual_situation": "attack-like urban explosion scene",
+            "image_arguments": [
+                {"role": "Instrument", "label": "fire"},
+                {"role": "Target", "label": "vehicle"},
+                {"role": "Place", "label": "street"},
+            ],
+            "visual_pattern_summary": "Attack-like image with visible fire, vehicle damage, and urban place cues.",
+            "retrieval_text": "Conflict:Attack smoke damaged vehicles burning building street Instrument fire Target vehicle Place street",
+        }
+    ],
+    "bridge_examples": [
+        {
+            "id": "bridge_attack_instrument_001",
+            "source_dataset": "manual_bridge",
+            "modality": "bridge",
+            "event_type": "Conflict:Attack",
+            "role": "Instrument",
+            "text_cues": ["bomb", "gun", "missile", "explosive device", "fire"],
+            "visual_cues": ["smoke", "flames", "weapon", "damaged vehicle", "debris"],
+            "note": "In attack events, Instrument may be explicit in text, but in images it is often supported indirectly by smoke, fire, debris, or weapon-like objects.",
+            "retrieval_text": "Conflict:Attack Instrument bomb gun missile explosive device fire smoke flames weapon damaged vehicle debris",
+        }
+    ],
+}
 
 
 def main() -> None:
@@ -43,7 +92,7 @@ def main() -> None:
         "image_desc": "people running, smoke",
         "perception_summary": "",
         "search_query": "",
-        "similar_events": [],
+        "similar_events": empty_layered_similar_events(),
         "evidence": [],
         "fusion_context": empty_fusion_context(),
         "event": empty_event(),

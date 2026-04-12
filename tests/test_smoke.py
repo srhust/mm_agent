@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+import mm_event_agent.nodes.extraction as extraction_module
 
 from mm_event_agent.graph import build_graph
 from mm_event_agent.evidence.debug import build_evidence_source_snapshot, summarize_evidence_sources
@@ -15,6 +16,7 @@ from mm_event_agent.grounding.debug import compare_grounding_stages, summarize_g
 from mm_event_agent.nodes.extraction import extraction
 from mm_event_agent.nodes.fusion import fusion
 from mm_event_agent.nodes.repair import repair
+from mm_event_agent.nodes.rag import rag
 from mm_event_agent.nodes.search import search
 from mm_event_agent.nodes.verifier import verifier
 from mm_event_agent.ontology import (
@@ -30,6 +32,7 @@ from mm_event_agent.schemas import (
     choose_best_span,
     empty_event,
     empty_fusion_context,
+    empty_layered_similar_events,
     find_all_text_occurrences,
     find_text_span,
     enforce_strict_text_grounding,
@@ -68,7 +71,7 @@ def make_state() -> dict:
         "image_desc": "market area with smoke and people running",
         "perception_summary": "",
         "search_query": "",
-        "similar_events": [],
+        "similar_events": empty_layered_similar_events(),
         "evidence": [],
         "fusion_context": empty_fusion_context(),
         "event": empty_event(),
@@ -91,9 +94,23 @@ class SmokeTests(unittest.TestCase):
 
         with patch(
             "mm_event_agent.nodes.rag._retrieve_similar_events",
-            return_value=[
-                '{"event_type":"Conflict:Attack","trigger":null,"text_arguments":[],"image_arguments":[]}'
-            ],
+            return_value={
+                "text_event_examples": [
+                    {
+                        "id": "ace_000123",
+                        "source_dataset": "ACE2005",
+                        "modality": "text",
+                        "event_type": "Conflict:Attack",
+                        "raw_text": "A bomb exploded in a market",
+                        "trigger": {"text": "exploded", "span": {"start": 7, "end": 15}},
+                        "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+                        "pattern_summary": "Attack reports often name place and instrument.",
+                        "retrieval_text": "Conflict:Attack exploded bomb market Place",
+                    }
+                ],
+                "image_semantic_examples": [],
+                "bridge_examples": [],
+            },
         ), patch(
             "mm_event_agent.nodes.search.search_news",
             return_value=[
@@ -177,7 +194,7 @@ class SmokeTests(unittest.TestCase):
             "raw_text": state["text"],
             "raw_image_desc": state["image_desc"],
             "perception_summary": "Text: A bomb exploded in a market\nImage: market area with smoke and people running",
-            "patterns": [],
+            "patterns": empty_layered_similar_events(),
             "evidence": [],
         }
 
@@ -200,6 +217,319 @@ class SmokeTests(unittest.TestCase):
 
         fused = fusion({**state, **search_result, "perception_summary": "summary"})
         self.assertEqual(fused["fusion_context"]["evidence"], [])
+
+    def test_stage_a_still_works_with_empty_local_rag(self) -> None:
+        llm = RecordingLLM('{"event_type":"Conflict:Attack"}')
+
+        with patch("mm_event_agent.nodes.extraction._get_llm", return_value=llm):
+            event_type = extraction_module._stage_a_select_event_type(
+                raw_text="A bomb exploded in a market",
+                image_side_info="raw_image_desc: smoke near market",
+                evidence_items=[],
+                patterns=empty_layered_similar_events(),
+                event_type_mode="closed_set",
+            )
+
+        self.assertEqual(event_type, "Conflict:Attack")
+        prompt = "\n".join(llm.prompts)
+        self.assertIn("Retrieved text event examples:\n(none)", prompt)
+        self.assertIn("Retrieved cross-modal bridge hints:\n(none)", prompt)
+
+    def test_stage_a_injects_formatted_text_examples_when_available(self) -> None:
+        llm = RecordingLLM('{"event_type":"Conflict:Attack"}')
+        patterns = {
+            "text_event_examples": [
+                {
+                    "id": "ace_000123",
+                    "source_dataset": "ACE2005",
+                    "modality": "text",
+                    "event_type": "Conflict:Attack",
+                    "raw_text": "A bomb exploded in a crowded market.",
+                    "trigger": {"text": "exploded", "span": {"start": 7, "end": 15}},
+                    "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 20, "end": 26}}],
+                    "pattern_summary": "Attack pattern with explicit place.",
+                    "retrieval_text": "Conflict:Attack exploded market Place",
+                }
+            ],
+            "image_semantic_examples": [],
+            "bridge_examples": [],
+        }
+
+        with patch("mm_event_agent.nodes.extraction._get_llm", return_value=llm):
+            extraction_module._stage_a_select_event_type(
+                raw_text="A bomb exploded in a market",
+                image_side_info="raw_image_desc: smoke near market",
+                evidence_items=[],
+                patterns=patterns,
+                event_type_mode="closed_set",
+            )
+
+        prompt = "\n".join(llm.prompts)
+        self.assertIn('"id": "ace_000123"', prompt)
+        self.assertIn('"source_dataset": "ACE2005"', prompt)
+        self.assertIn('"pattern_summary": "Attack pattern with explicit place."', prompt)
+        self.assertIn("Use retrieved text event examples as pattern guidance only.", prompt)
+
+    def test_stage_a_injects_formatted_bridge_examples_when_available(self) -> None:
+        llm = RecordingLLM('{"event_type":"Conflict:Attack"}')
+        patterns = {
+            "text_event_examples": [],
+            "image_semantic_examples": [],
+            "bridge_examples": [
+                {
+                    "id": "bridge_attack_instrument_001",
+                    "source_dataset": "manual_bridge",
+                    "modality": "bridge",
+                    "event_type": "Conflict:Attack",
+                    "role": "Instrument",
+                    "text_cues": ["bomb", "missile"],
+                    "visual_cues": ["smoke", "flames"],
+                    "note": "Instrument may be indirectly visible through smoke and fire.",
+                    "retrieval_text": "Conflict:Attack Instrument bomb smoke flames",
+                }
+            ],
+        }
+
+        with patch("mm_event_agent.nodes.extraction._get_llm", return_value=llm):
+            extraction_module._stage_a_select_event_type(
+                raw_text="A bomb exploded in a market",
+                image_side_info="raw_image_desc: smoke near market",
+                evidence_items=[],
+                patterns=patterns,
+                event_type_mode="closed_set",
+            )
+
+        prompt = "\n".join(llm.prompts)
+        self.assertIn('"id": "bridge_attack_instrument_001"', prompt)
+        self.assertIn('"role": "Instrument"', prompt)
+        self.assertIn('"visual_cues": ["smoke", "flames"]', prompt)
+        self.assertIn("Use cross-modal bridge hints only as auxiliary semantic support.", prompt)
+
+    def test_stage_a_still_respects_closed_set_and_transfer_modes(self) -> None:
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(['{"event_type":"Conflict:Attack"}']),
+        ):
+            closed_set_result = extraction_module._stage_a_select_event_type(
+                raw_text="A bomb exploded in a market",
+                image_side_info="raw_image_desc: smoke near market",
+                evidence_items=[],
+                patterns=empty_layered_similar_events(),
+                event_type_mode="closed_set",
+            )
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(['{"event_type":"Unsupported"}']),
+        ):
+            transfer_result = extraction_module._stage_a_select_event_type(
+                raw_text="This may not match the ontology",
+                image_side_info="raw_image_desc: unclear",
+                evidence_items=[],
+                patterns=empty_layered_similar_events(),
+                event_type_mode="transfer",
+            )
+
+        self.assertEqual(closed_set_result, "Conflict:Attack")
+        self.assertEqual(transfer_result, "Unsupported")
+
+    def test_stage_b_still_works_with_empty_local_rag(self) -> None:
+        llm = RecordingLLM('{"trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[]}')
+
+        with patch("mm_event_agent.nodes.extraction._get_llm", return_value=llm):
+            result = extraction_module._stage_b_extract_text_fields(
+                event_type="Conflict:Attack",
+                raw_text="A bomb exploded in a market",
+                image_side_info="raw_image_desc: smoke near market",
+                patterns=empty_layered_similar_events(),
+                evidence_items=[],
+            )
+
+        self.assertEqual(result["trigger"]["text"], "exploded")
+        prompt = "\n".join(llm.prompts)
+        self.assertIn("Retrieved text event examples:\n(none)", prompt)
+        self.assertIn("Optional bridge hints:\n(none)", prompt)
+
+    def test_stage_b_injects_text_examples_and_bridge_hints(self) -> None:
+        llm = RecordingLLM('{"trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[]}')
+        patterns = {
+            "text_event_examples": [
+                {
+                    "id": "ace_000123",
+                    "source_dataset": "ACE2005",
+                    "modality": "text",
+                    "event_type": "Conflict:Attack",
+                    "raw_text": "A bomb exploded in a crowded market.",
+                    "trigger": {"text": "exploded", "span": {"start": 7, "end": 15}},
+                    "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 20, "end": 26}}],
+                    "pattern_summary": "Attack pattern with explicit place.",
+                    "retrieval_text": "Conflict:Attack exploded market Place",
+                }
+            ],
+            "image_semantic_examples": [],
+            "bridge_examples": [
+                {
+                    "id": "bridge_attack_target_001",
+                    "source_dataset": "manual_bridge",
+                    "modality": "bridge",
+                    "event_type": "Conflict:Attack",
+                    "role": "Target",
+                    "text_cues": ["civilian"],
+                    "visual_cues": ["injured person"],
+                    "note": "Victim/Target disambiguation support.",
+                    "retrieval_text": "Conflict:Attack Target civilian injured person",
+                }
+            ],
+        }
+
+        with patch("mm_event_agent.nodes.extraction._get_llm", return_value=llm):
+            extraction_module._stage_b_extract_text_fields(
+                event_type="Conflict:Attack",
+                raw_text="A bomb exploded in a market",
+                image_side_info="raw_image_desc: smoke near market",
+                patterns=patterns,
+                evidence_items=[],
+            )
+
+        prompt = "\n".join(llm.prompts)
+        self.assertIn('"id": "ace_000123"', prompt)
+        self.assertIn("Use retrieved text event examples as few-shot pattern guidance.", prompt)
+        self.assertIn("Victim/Target disambiguation support.", prompt)
+        self.assertIn("Use bridge hints only for limited role disambiguation support.", prompt)
+
+    def test_local_rag_empty_layered_corpora_returns_safe_empty_output(self) -> None:
+        state = make_state()
+
+        with patch(
+            "mm_event_agent.nodes.rag._retrieve_similar_events",
+            return_value=empty_layered_similar_events(),
+        ):
+            result = rag(state)
+
+        self.assertEqual(
+            result["similar_events"],
+            {
+                "text_event_examples": [],
+                "image_semantic_examples": [],
+                "bridge_examples": [],
+            },
+        )
+
+    def test_local_rag_output_structure_is_stable(self) -> None:
+        state = make_state()
+
+        with patch(
+            "mm_event_agent.nodes.rag._retrieve_similar_events",
+            return_value={
+                "text_event_examples": [
+                    {
+                        "id": "ace_000123",
+                        "source_dataset": "ACE2005",
+                        "modality": "text",
+                        "event_type": "Conflict:Attack",
+                        "raw_text": "A bomb exploded in a market",
+                        "trigger": {"text": "exploded", "span": {"start": 7, "end": 15}},
+                        "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+                        "pattern_summary": "Attack reports often name place and instrument.",
+                        "retrieval_text": "Conflict:Attack exploded bomb market Place",
+                    }
+                ],
+                "image_semantic_examples": [
+                    {
+                        "id": "swig_000456",
+                        "source_dataset": "SWiG",
+                        "modality": "image_semantics",
+                        "event_type": "Conflict:Attack",
+                        "visual_situation": "explosion aftermath",
+                        "image_desc": "smoke near stalls",
+                        "image_arguments": [{"role": "Place", "label": "market area"}],
+                        "visual_pattern_summary": "Scene-level place labels help image-side argument prediction.",
+                        "retrieval_text": "Conflict:Attack smoke market area Place",
+                    }
+                ],
+                "bridge_examples": [
+                    {
+                        "id": "bridge_attack_place_001",
+                        "source_dataset": "manual_bridge",
+                        "modality": "bridge",
+                        "event_type": "Conflict:Attack",
+                        "role": "Place",
+                        "text_cues": ["market"],
+                        "visual_cues": ["market area"],
+                        "note": "Maps text place mentions to image-side scene labels.",
+                        "retrieval_text": "Conflict:Attack Place market market area",
+                    }
+                ],
+            },
+        ):
+            result = rag(state)
+
+        self.assertEqual(
+            set(result["similar_events"].keys()),
+            {"text_event_examples", "image_semantic_examples", "bridge_examples"},
+        )
+        self.assertEqual(result["similar_events"]["text_event_examples"][0]["id"], "ace_000123")
+        self.assertEqual(result["similar_events"]["text_event_examples"][0]["modality"], "text")
+        self.assertEqual(result["similar_events"]["text_event_examples"][0]["trigger"]["text"], "exploded")
+        self.assertEqual(result["similar_events"]["text_event_examples"][0]["source_dataset"], "ACE2005")
+        self.assertEqual(result["similar_events"]["image_semantic_examples"][0]["source_dataset"], "SWiG")
+        self.assertEqual(result["similar_events"]["image_semantic_examples"][0]["modality"], "image_semantics")
+        self.assertEqual(result["similar_events"]["image_semantic_examples"][0]["image_arguments"][0]["label"], "market area")
+        self.assertEqual(result["similar_events"]["bridge_examples"][0]["role"], "Place")
+        self.assertEqual(result["similar_events"]["bridge_examples"][0]["modality"], "bridge")
+
+    def test_layered_retrieval_remains_usable_by_downstream_code(self) -> None:
+        state = make_state()
+        state["similar_events"] = {
+            "text_event_examples": [
+                {
+                    "id": "ace_000123",
+                    "source_dataset": "ACE2005",
+                    "modality": "text",
+                    "event_type": "Conflict:Attack",
+                    "raw_text": "A bomb exploded in a market",
+                    "trigger": {"text": "exploded", "span": {"start": 7, "end": 15}},
+                    "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+                    "pattern_summary": "Attack reports often name place and instrument.",
+                    "retrieval_text": "Conflict:Attack exploded bomb market Place",
+                }
+            ],
+            "image_semantic_examples": [
+                {
+                    "id": "swig_000456",
+                    "source_dataset": "SWiG",
+                    "modality": "image_semantics",
+                    "event_type": "Conflict:Attack",
+                    "visual_situation": "explosion aftermath",
+                    "image_desc": "smoke near stalls",
+                    "image_arguments": [{"role": "Place", "label": "market area"}],
+                    "visual_pattern_summary": "Scene-level place labels help image-side argument prediction.",
+                    "retrieval_text": "Conflict:Attack smoke market area Place",
+                }
+            ],
+            "bridge_examples": [
+                {
+                    "id": "bridge_attack_place_001",
+                    "source_dataset": "manual_bridge",
+                    "modality": "bridge",
+                    "event_type": "Conflict:Attack",
+                    "role": "Place",
+                    "text_cues": ["market"],
+                    "visual_cues": ["market area"],
+                    "note": "Maps text place mentions to image-side scene labels.",
+                    "retrieval_text": "Conflict:Attack Place market market area",
+                }
+            ],
+        }
+
+        fused = fusion({**state, "perception_summary": "summary"})
+
+        self.assertEqual(
+            set(fused["fusion_context"]["patterns"].keys()),
+            {"text_event_examples", "image_semantic_examples", "bridge_examples"},
+        )
+        self.assertEqual(fused["fusion_context"]["patterns"]["text_event_examples"][0]["modality"], "text")
+        self.assertEqual(fused["fusion_context"]["patterns"]["bridge_examples"][0]["role"], "Place")
 
     def test_tavily_adapter_without_api_key_returns_empty_evidence(self) -> None:
         client = TavilySearchClient(api_key="")
@@ -1289,7 +1619,7 @@ class SmokeTests(unittest.TestCase):
             "raw_text": state["text"],
             "raw_image_desc": state["image_desc"],
             "perception_summary": "summary",
-            "patterns": [],
+            "patterns": empty_layered_similar_events(),
             "evidence": [],
         }
         stage_c_llm = RecordingLLM('{"image_arguments":[]}')
@@ -1299,7 +1629,7 @@ class SmokeTests(unittest.TestCase):
         ):
             from mm_event_agent.nodes.extraction import _stage_c_extract_image_arguments
 
-            result = _stage_c_extract_image_arguments("Conflict:Attack", state["image_desc"], [])
+            result = _stage_c_extract_image_arguments("Conflict:Attack", state["image_desc"], [], empty_layered_similar_events(), [])
 
         self.assertEqual(result, [])
         self.assertTrue(stage_c_llm.prompts)
@@ -1324,6 +1654,8 @@ class SmokeTests(unittest.TestCase):
                 "Conflict:Attack",
                 "market area with smoke and visible blast damage",
                 [],
+                empty_layered_similar_events(),
+                [],
             )
 
         self.assertEqual(
@@ -1333,6 +1665,66 @@ class SmokeTests(unittest.TestCase):
         prompt = stage_c_llm.prompts[0]
         self.assertIn("visually stronger roles: [Target, Instrument, Place]", prompt)
         self.assertIn("For visually stronger roles, prediction is still optional", prompt)
+
+    def test_stage_c_injects_image_examples_and_bridge_hints(self) -> None:
+        stage_c_llm = RecordingLLM('{"image_arguments":[]}')
+        patterns = {
+            "text_event_examples": [],
+            "image_semantic_examples": [
+                {
+                    "id": "swig_000456",
+                    "source_dataset": "SWiG",
+                    "modality": "image_semantics",
+                    "event_type": "Conflict:Attack",
+                    "image_desc": "Smoke rises from damaged vehicles near a burning building.",
+                    "visual_situation": "attack-like urban explosion scene",
+                    "image_arguments": [
+                        {"role": "Instrument", "label": "fire"},
+                        {"role": "Target", "label": "vehicle"},
+                        {"role": "Place", "label": "street"},
+                    ],
+                    "visual_pattern_summary": "Attack-like image with visible fire and urban damage.",
+                    "retrieval_text": "Conflict:Attack smoke damaged vehicles burning building street Instrument fire Target vehicle Place street",
+                }
+            ],
+            "bridge_examples": [
+                {
+                    "id": "bridge_attack_instrument_001",
+                    "source_dataset": "manual_bridge",
+                    "modality": "bridge",
+                    "event_type": "Conflict:Attack",
+                    "role": "Instrument",
+                    "text_cues": ["bomb", "gun", "missile"],
+                    "visual_cues": ["smoke", "flames", "debris"],
+                    "note": "Instrument may be explicit in text but only indirectly visible in image.",
+                    "retrieval_text": "Conflict:Attack Instrument bomb gun missile smoke flames debris",
+                }
+            ],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=stage_c_llm,
+        ):
+            from mm_event_agent.nodes.extraction import _stage_c_extract_image_arguments
+
+            _stage_c_extract_image_arguments(
+                "Conflict:Attack",
+                "people running, smoke near damaged cars",
+                [{"role": "Instrument", "text": "bomb", "span": None}],
+                patterns,
+                [],
+            )
+
+        prompt = stage_c_llm.prompts[0]
+        self.assertIn("Retrieved image semantic examples:", prompt)
+        self.assertIn("Image Example 1", prompt)
+        self.assertIn("- Instrument: fire", prompt)
+        self.assertIn("summary: Attack-like image with visible fire and urban damage.", prompt)
+        self.assertIn("Retrieved cross-modal bridge hints:", prompt)
+        self.assertIn("Bridge 1", prompt)
+        self.assertIn("Use image semantic examples as visual pattern guidance.", prompt)
+        self.assertIn("Use bridge hints to connect text roles and visual cues.", prompt)
 
     def test_transfer_mode_allows_unsupported(self) -> None:
         state = make_state()

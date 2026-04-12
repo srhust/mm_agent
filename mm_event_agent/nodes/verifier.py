@@ -24,6 +24,7 @@ from mm_event_agent.schemas import (
     VerificationDiagnostic,
     empty_event,
     empty_fusion_context,
+    empty_layered_similar_events,
     extract_json_object,
     validate_event,
 )
@@ -490,7 +491,7 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
                 "raw_text": str(state.get("text") or ""),
                 "raw_image_desc": str(state.get("image_desc") or ""),
                 "perception_summary": str(state.get("perception_summary") or ""),
-                "patterns": list(state.get("similar_events")) if isinstance(state.get("similar_events"), list) else [],
+                "patterns": state.get("similar_events") if isinstance(state.get("similar_events"), dict) else empty_layered_similar_events(),
                 "evidence": list(state.get("evidence")) if isinstance(state.get("evidence"), list) else [],
             }
         )

@@ -97,6 +97,48 @@ class EvidenceItem(TypedDict):
     score: float
 
 
+class TextEventExample(TypedDict):
+    id: str
+    event_type: str
+    modality: str
+    raw_text: str
+    trigger: Trigger | dict[str, Any]
+    text_arguments: list[TextArgument | dict[str, Any]]
+    source_dataset: str
+    pattern_summary: str
+    retrieval_text: str
+
+
+class ImageSemanticExample(TypedDict):
+    id: str
+    source_dataset: str
+    modality: str
+    event_type: str
+    visual_situation: str
+    image_desc: str
+    image_arguments: list[dict[str, Any]]
+    visual_pattern_summary: str
+    retrieval_text: str
+
+
+class BridgeExample(TypedDict):
+    id: str
+    source_dataset: str
+    modality: str
+    event_type: str
+    role: str
+    text_cues: list[str]
+    visual_cues: list[str]
+    note: str
+    retrieval_text: str
+
+
+class LayeredSimilarEvents(TypedDict):
+    text_event_examples: list[TextEventExample]
+    image_semantic_examples: list[ImageSemanticExample]
+    bridge_examples: list[BridgeExample]
+
+
 class VerificationDiagnostic(TypedDict):
     field_path: str
     issue_type: str
@@ -109,7 +151,7 @@ class FusionContext(TypedDict):
     # not the original raw image object itself.
     raw_image_desc: str
     perception_summary: str
-    patterns: list[dict[str, Any]]
+    patterns: LayeredSimilarEvents
     evidence: list[EvidenceItem]
 
 
@@ -134,8 +176,16 @@ def empty_fusion_context() -> FusionContext:
         "raw_text": "",
         "raw_image_desc": "",
         "perception_summary": "",
-        "patterns": [],
+        "patterns": empty_layered_similar_events(),
         "evidence": [],
+    }
+
+
+def empty_layered_similar_events() -> LayeredSimilarEvents:
+    return {
+        "text_event_examples": [],
+        "image_semantic_examples": [],
+        "bridge_examples": [],
     }
 
 

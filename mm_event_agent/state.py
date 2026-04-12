@@ -9,6 +9,7 @@ from mm_event_agent.schemas import (
     EvidenceItem,
     FusionContext,
     GroundingResult,
+    LayeredSimilarEvents,
     VerificationDiagnostic,
 )
 
@@ -38,7 +39,7 @@ class AgentState(TypedDict):
     image_desc: str
     perception_summary: str
     search_query: str
-    similar_events: list[dict[str, Any]]
+    similar_events: LayeredSimilarEvents
     evidence: list[EvidenceItem]
     fusion_context: FusionContext
     event: Event

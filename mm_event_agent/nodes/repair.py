@@ -51,8 +51,12 @@ def _msg_text(content: Any) -> str:
 
 
 def _format_similar_events(raw: Any) -> str:
-    if not raw or not isinstance(raw, list):
+    if not raw:
         return "(none)"
+    if isinstance(raw, dict):
+        return json.dumps(raw, ensure_ascii=False)
+    if not isinstance(raw, list):
+        return str(raw)
     lines: list[str] = []
     for ev in raw:
         if isinstance(ev, dict):

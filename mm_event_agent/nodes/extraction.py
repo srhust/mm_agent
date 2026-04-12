@@ -78,14 +78,112 @@ def _build_image_side_info(raw_image_desc: str, perception_summary: str) -> str:
     return f"raw_image_desc: {image_desc}"
 
 
+def format_text_event_examples_for_prompt(examples: list[dict[str, Any]], top_k: int = 2) -> str:
+    if not isinstance(examples, list) or not examples:
+        return "(none)"
+    lines: list[str] = []
+    for index, item in enumerate(examples[: max(1, top_k)], start=1):
+        if not isinstance(item, dict):
+            continue
+        payload = {
+            "rank": index,
+            "id": str(item.get("id") or "").strip(),
+            "source_dataset": str(item.get("source_dataset") or "").strip(),
+            "event_type": str(item.get("event_type") or "").strip(),
+            "raw_text": str(item.get("raw_text") or "").strip(),
+            "trigger": item.get("trigger"),
+            "text_arguments": item.get("text_arguments") if isinstance(item.get("text_arguments"), list) else [],
+            "pattern_summary": str(item.get("pattern_summary") or "").strip(),
+        }
+        lines.append(json.dumps(payload, ensure_ascii=False))
+    return "\n".join(lines) if lines else "(none)"
+
+
+def format_image_semantic_examples_for_prompt(examples: list[dict[str, Any]], top_k: int = 2) -> str:
+    if not isinstance(examples, list) or not examples:
+        return "(none)"
+    blocks: list[str] = []
+    for index, item in enumerate(examples[: max(1, top_k)], start=1):
+        if not isinstance(item, dict):
+            continue
+        lines = [
+            f"Image Example {index}",
+            f'event_type: {str(item.get("event_type") or "").strip()}',
+            f'image_desc: {str(item.get("image_desc") or "").strip()}',
+            "image_arguments:",
+        ]
+        image_arguments = item.get("image_arguments")
+        if isinstance(image_arguments, list) and image_arguments:
+            for argument in image_arguments:
+                if not isinstance(argument, dict):
+                    continue
+                role = str(argument.get("role") or "").strip()
+                label = str(argument.get("label") or "").strip()
+                if role or label:
+                    lines.append(f"- {role}: {label}")
+        else:
+            lines.append("- (none)")
+        lines.append(f'summary: {str(item.get("visual_pattern_summary") or "").strip()}')
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks) if blocks else "(none)"
+
+
+def format_bridge_examples_for_prompt(examples: list[dict[str, Any]], top_k: int = 2) -> str:
+    if not isinstance(examples, list) or not examples:
+        return "(none)"
+    blocks: list[str] = []
+    for index, item in enumerate(examples[: max(1, top_k)], start=1):
+        if not isinstance(item, dict):
+            continue
+        text_cues = item.get("text_cues") if isinstance(item.get("text_cues"), list) else []
+        visual_cues = item.get("visual_cues") if isinstance(item.get("visual_cues"), list) else []
+        blocks.append(
+            "\n".join(
+                [
+                    f"Bridge {index}",
+                    f'event_type: {str(item.get("event_type") or "").strip()}',
+                    f'role: {str(item.get("role") or "").strip()}',
+                    f'text_cues: {", ".join(str(x) for x in text_cues) if text_cues else "(none)"}',
+                    f'visual_cues: {", ".join(str(x) for x in visual_cues) if visual_cues else "(none)"}',
+                    f'note: {str(item.get("note") or "").strip()}',
+                ]
+            )
+        )
+    return "\n\n".join(blocks) if blocks else "(none)"
+
+
+def _format_text_event_examples_topk(patterns: Any) -> str:
+    if not isinstance(patterns, dict):
+        return "(none)"
+    examples = patterns.get("text_event_examples")
+    return format_text_event_examples_for_prompt(examples if isinstance(examples, list) else [])
+
+
+def _format_bridge_examples_topk(patterns: Any) -> str:
+    if not isinstance(patterns, dict):
+        return "(none)"
+    examples = patterns.get("bridge_examples")
+    return format_bridge_examples_for_prompt(examples if isinstance(examples, list) else [], top_k=2)
+
+
+def _format_image_semantic_examples_topk(patterns: Any) -> str:
+    if not isinstance(patterns, dict):
+        return "(none)"
+    examples = patterns.get("image_semantic_examples")
+    return format_image_semantic_examples_for_prompt(examples if isinstance(examples, list) else [], top_k=2)
+
+
 def _stage_a_select_event_type(
     raw_text: str,
     image_side_info: str,
     evidence_items: list[Any],
+    patterns: Any,
     event_type_mode: str,
 ) -> str:
     allowed_event_types = get_supported_event_types()
     ontology_block = format_full_ontology_for_prompt()
+    formatted_text_event_examples_topk = _format_text_event_examples_topk(patterns)
+    formatted_bridge_examples_topk = _format_bridge_examples_topk(patterns)
     normalized_mode = str(event_type_mode or "closed_set").strip() or "closed_set"
     if normalized_mode not in {"closed_set", "transfer"}:
         normalized_mode = "closed_set"
@@ -110,8 +208,15 @@ def _stage_a_select_event_type(
         f"{json.dumps(allowed_event_types, ensure_ascii=False)}\n\n"
         "Ontology semantics:\n"
         f"{ontology_block}\n\n"
+        "Retrieved text event examples:\n"
+        f"{formatted_text_event_examples_topk}\n\n"
+        "Retrieved cross-modal bridge hints:\n"
+        f"{formatted_bridge_examples_topk}\n\n"
         "Use raw_text, image-side information, and evidence. Prefer evidence when available.\n"
         "- Use event definitions and trigger hints to choose the best matching event type.\n"
+        "- Use retrieved text event examples as pattern guidance only.\n"
+        "- Use cross-modal bridge hints only as auxiliary semantic support.\n"
+        "- If evidence conflicts with retrieved examples, prefer evidence and ontology over retrieved examples.\n"
         "- Do not invent new labels or open-set variants.\n"
         f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
         f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
@@ -130,18 +235,27 @@ def _stage_b_extract_text_fields(
     event_type: str,
     raw_text: str,
     image_side_info: str,
+    patterns: Any,
     evidence_items: list[Any],
 ) -> dict[str, Any]:
     allowed_roles = get_allowed_text_roles(event_type)
     schema_block = format_event_schema_for_prompt(event_type)
+    formatted_text_event_examples_topk = _format_text_event_examples_topk(patterns)
+    formatted_bridge_examples_topk = _format_bridge_examples_topk(patterns)
     prompt = (
         "Stage B: extract text trigger and text arguments from raw_text.\n"
         "Extract text-grounded event fields from raw_text.\n"
-        "Ontology semantics:\n"
+        "Event ontology for the selected event_type:\n"
         f"{schema_block}\n\n"
+        "Retrieved text event examples:\n"
+        f"{formatted_text_event_examples_topk}\n\n"
+        "Optional bridge hints:\n"
+        f"{formatted_bridge_examples_topk}\n\n"
         "Requirements:\n"
         "- event_type is fixed; use only the allowed text roles for this event_type.\n"
         f"- allowed text roles for this stage: {json.dumps(allowed_roles, ensure_ascii=False)}\n"
+        "- Use retrieved text event examples as few-shot pattern guidance.\n"
+        "- Use bridge hints only for limited role disambiguation support.\n"
         "- Use the role definitions to decide which extracted mention belongs to which role.\n"
         "- Use the trigger_hint only as semantic guidance; trigger.text must still be copied from raw_text exactly.\n"
         "- trigger.text must be copied directly from raw_text or trigger must be null.\n"
@@ -168,20 +282,30 @@ def _stage_c_extract_image_arguments(
     event_type: str,
     image_side_info: str,
     text_arguments: list[dict[str, Any]],
+    patterns: Any,
+    evidence_items: list[Any],
 ) -> list[dict[str, Any]]:
     allowed_roles = get_allowed_image_roles(event_type)
     schema_block = format_event_schema_for_prompt(event_type)
     visibility_block = format_image_role_visibility_guidance_for_prompt(event_type)
+    formatted_image_semantic_examples_topk = _format_image_semantic_examples_topk(patterns)
+    formatted_bridge_examples_topk = _format_bridge_examples_topk(patterns)
     prompt = (
-        "Stage C: extract image argument semantics from image-side information.\n"
+        "Stage C: extract image argument semantic candidates.\n"
         "Extract image argument semantic candidates from image-side information.\n"
-        "Ontology semantics:\n"
+        "Event ontology for the selected event_type:\n"
         f"{schema_block}\n\n"
+        "Retrieved image semantic examples:\n"
+        f"{formatted_image_semantic_examples_topk}\n\n"
+        "Retrieved cross-modal bridge hints:\n"
+        f"{formatted_bridge_examples_topk}\n\n"
         "Image-role visibility guidance:\n"
         f"{visibility_block}\n\n"
         "Requirements:\n"
         "- event_type is fixed; use only the allowed image roles for this event_type.\n"
         f"- allowed image roles for this stage: {json.dumps(allowed_roles, ensure_ascii=False)}\n"
+        "- Use image semantic examples as visual pattern guidance.\n"
+        "- Use bridge hints to connect text roles and visual cues.\n"
         "- Use the role definitions and extraction notes to map visible evidence to semantic roles.\n"
         "- condition on the selected event_type and the extracted text arguments.\n"
         "- output semantic image arguments only.\n"
@@ -193,7 +317,8 @@ def _stage_c_extract_image_arguments(
         "- use role + label only when supported by image-side information.\n"
         'Return ONLY JSON: {"image_arguments": [{"role": string, "label": string, "bbox": null, "grounding_status": "unresolved"}]}\n\n'
         f'{{"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
-        f'"text_arguments": {json.dumps(text_arguments, ensure_ascii=False)}}}'
+        f'"text_arguments": {json.dumps(text_arguments, ensure_ascii=False)}, '
+        f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
     )
     parsed = _extract_stage_json(prompt)
     image_arguments = parsed.get("image_arguments")
@@ -204,11 +329,12 @@ def _run_staged_extraction(
     raw_text: str,
     raw_image_desc: str,
     perception_summary: str,
+    patterns: Any,
     evidence_items: list[Any],
     event_type_mode: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     image_side_info = _build_image_side_info(raw_image_desc, perception_summary)
-    event_type = _stage_a_select_event_type(raw_text, image_side_info, evidence_items, event_type_mode)
+    event_type = _stage_a_select_event_type(raw_text, image_side_info, evidence_items, patterns, event_type_mode)
     stage_a_info = {
         "stage_a_event_type_mode": str(event_type_mode or "closed_set"),
         "stage_a_selected_event_type": event_type,
@@ -216,11 +342,13 @@ def _run_staged_extraction(
     }
     if event_type == "Unsupported":
         return empty_event(), stage_a_info
-    text_fields = _stage_b_extract_text_fields(event_type, raw_text, image_side_info, evidence_items)
+    text_fields = _stage_b_extract_text_fields(event_type, raw_text, image_side_info, patterns, evidence_items)
     image_arguments = _stage_c_extract_image_arguments(
         event_type,
         image_side_info,
         text_fields["text_arguments"],
+        patterns,
+        evidence_items,
     )
     return (
         {
@@ -280,8 +408,8 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
     patterns = fusion_context.get("patterns")
     evidence_items = fusion_context.get("evidence")
 
-    if not isinstance(patterns, list):
-        patterns = []
+    if not isinstance(patterns, dict):
+        patterns = {}
     if not isinstance(evidence_items, list):
         evidence_items = []
     stage_a_info = {
@@ -298,6 +426,7 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             raw_text,
             raw_image_desc,
             perception_summary,
+            patterns,
             evidence_items,
             event_type_mode,
         )
