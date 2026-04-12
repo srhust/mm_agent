@@ -2,17 +2,39 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Mapping
+
+from mm_event_agent.observability import log_node_event
+from mm_event_agent.schemas import FusionContext, empty_fusion_context
 
 
 def fusion(state: Mapping[str, Any]) -> dict[str, Any]:
     """Read only data fields and write only data field fusion_context."""
-    fusion_context = {
-        "input": str(state.get("perception_summary") or ""),
-        "patterns": list(state.get("similar_events")) if isinstance(state.get("similar_events"), list) else [],
-        "evidence": list(state.get("evidence")) if isinstance(state.get("evidence"), list) else [],
-    }
-    return {"fusion_context": fusion_context}
+    started_at = time.perf_counter()
+    try:
+        evidence = state.get("evidence")
+        fusion_context: FusionContext = {
+            "raw_text": str(state.get("text") or ""),
+            "raw_image_desc": str(state.get("image_desc") or ""),
+            "perception_summary": str(state.get("perception_summary") or ""),
+            "patterns": list(state.get("similar_events")) if isinstance(state.get("similar_events"), list) else [],
+            "evidence": list(evidence) if isinstance(evidence, list) else [],
+        }
+        result = {"fusion_context": fusion_context}
+        log_node_event(
+            "fusion",
+            state,
+            started_at,
+            True,
+            fusion_patterns=len(fusion_context["patterns"]),
+            returned_evidence=len(fusion_context["evidence"]),
+        )
+        return result
+    except Exception as exc:
+        result = {"fusion_context": empty_fusion_context()}
+        log_node_event("fusion", state, started_at, False, error=str(exc), fusion_patterns=0, returned_evidence=0)
+        return result
 
 
 run = fusion

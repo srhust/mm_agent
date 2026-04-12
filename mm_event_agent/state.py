@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
+from mm_event_agent.schemas import Event, EvidenceItem, FusionContext
+
 
 class AgentState(TypedDict):
     """State for the multimodal event extraction agent.
@@ -15,10 +17,11 @@ class AgentState(TypedDict):
     text: str
     image_desc: str
     perception_summary: str
+    search_query: str
     similar_events: list[dict[str, Any]]
-    evidence: list[dict[str, str]]
-    fusion_context: dict[str, Any]
-    event: str
+    evidence: list[EvidenceItem]
+    fusion_context: FusionContext
+    event: Event
     memory: list[Any]
 
     # Control fields: verifier/repair loop only.

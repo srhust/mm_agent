@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
+import time
 from typing import Any, Mapping
 
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
+
+from mm_event_agent.observability import log_node_event
+from mm_event_agent.schemas import empty_event, empty_fusion_context, parse_event_json
 
 _llm: ChatOpenAI | None = None
 
@@ -30,17 +34,24 @@ def _msg_text(content: Any) -> str:
 
 def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
     """Read only data field fusion_context and write only data field event."""
+    started_at = time.perf_counter()
     raw_context = state.get("fusion_context")
     if isinstance(raw_context, dict):
         fusion_context = raw_context
     else:
-        fusion_context = {
-            "input": str(state.get("perception_summary") or ""),
-            "patterns": [],
-            "evidence": list(state.get("evidence")) if isinstance(state.get("evidence"), list) else [],
-        }
+        fusion_context = empty_fusion_context()
+        fusion_context.update(
+            {
+                "raw_text": str(state.get("text") or ""),
+                "raw_image_desc": str(state.get("image_desc") or ""),
+                "perception_summary": str(state.get("perception_summary") or ""),
+                "evidence": list(state.get("evidence")) if isinstance(state.get("evidence"), list) else [],
+            }
+        )
 
-    input_summary = str(fusion_context.get("input") or "")
+    raw_text = str(fusion_context.get("raw_text") or "")
+    raw_image_desc = str(fusion_context.get("raw_image_desc") or "")
+    perception_summary = str(fusion_context.get("perception_summary") or "")
     patterns = fusion_context.get("patterns")
     evidence_items = fusion_context.get("evidence")
 
@@ -53,29 +64,54 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
         "Extract exactly ONE structured event using ONLY the fusion_context below. "
         "Do not use or assume any information outside this block.\n\n"
         "Output a single JSON object with keys: "
-        "event_type (string), trigger (string), arguments (object or array).\n\n"
+        "event_type (string), trigger (string), arguments (object).\n\n"
         "Rules:\n"
-        "1. Event facts must be grounded in evidence when evidence is available.\n"
-        "2. Event structure should follow similar_events when similar_events are available.\n"
+        "1. Event facts must be grounded in evidence items when evidence is available.\n"
+        "2. Event structure should follow similar_events patterns when patterns are available.\n"
         "3. If evidence conflicts with patterns, trust evidence over patterns.\n"
-        "4. If similar_events is empty, skip pattern guidance and infer only a reasonable structure from the input.\n"
-        "5. If evidence is empty, rely on input only and do not invent unsupported facts.\n"
-        "6. Ensure extraction still returns one valid JSON object even when patterns or evidence are empty.\n\n"
+        "4. If patterns are empty, skip pattern guidance.\n"
+        "5. If evidence is empty, rely on raw_text, raw_image_desc, and perception_summary only.\n"
+        "6. Use raw_text and raw_image_desc as multimodal provenance; do not ignore either when they provide usable incident cues.\n"
+        "7. Ensure extraction still returns one valid JSON object even when patterns or evidence are empty.\n\n"
         "Evidence format:\n"
         "- fusion_context.evidence is a list of evidence items.\n"
-        "- Each item may contain title, snippet, url, and source_type.\n"
-        "- Treat snippets as the primary factual content unless title/url add support.\n\n"
+        "- Each item contains title, snippet, url, source_type, published_at, and score.\n"
+        "- Treat evidence snippets as the primary factual content, with title and url as supporting provenance.\n\n"
         "Guidance:\n"
-        f"- Input summary present: {'YES' if input_summary else 'NO'}\n"
+        f"- Raw text present: {'YES' if raw_text else 'NO'}\n"
+        f"- Raw image description present: {'YES' if raw_image_desc else 'NO'}\n"
+        f"- Perception summary present: {'YES' if perception_summary else 'NO'}\n"
         f"- Pattern guidance available: {'YES' if patterns else 'NO'}\n"
         f"- Evidence available: {'YES' if evidence_items else 'NO'}\n\n"
         "Reply with ONLY valid JSON. No markdown fences or extra text.\n\n"
         f"{json.dumps(fusion_context, ensure_ascii=False)}"
     )
 
-    out = _get_llm().invoke([HumanMessage(content=prompt)])
-    raw = _msg_text(out.content)
-    return {"event": raw}
+    try:
+        out = _get_llm().invoke([HumanMessage(content=prompt)])
+        event = parse_event_json(_msg_text(out.content))
+        result = {"event": event}
+        log_node_event(
+            "extraction",
+            state,
+            started_at,
+            True,
+            event_type=event["event_type"],
+            evidence_used=len(evidence_items),
+        )
+        return result
+    except Exception as exc:
+        fallback = empty_event()
+        result = {"event": fallback}
+        log_node_event(
+            "extraction",
+            state,
+            started_at,
+            False,
+            error=str(exc),
+            evidence_used=len(evidence_items),
+        )
+        return result
 
 
 run = extraction

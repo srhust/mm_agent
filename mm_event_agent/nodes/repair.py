@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Any, Mapping
 
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
+
+from mm_event_agent.observability import log_node_event
+from mm_event_agent.schemas import empty_event, parse_event_json, validate_event
 
 _llm: ChatOpenAI | None = None
 
@@ -63,10 +67,16 @@ def _format_evidence_items(raw: Any) -> str:
 
 def repair(state: Mapping[str, Any]) -> dict[str, Any]:
     """Read data + control context, write repaired event and repair_attempts only."""
+    started_at = time.perf_counter()
     if state.get("verified"):
+        log_node_event("repair", state, started_at, True, skipped=True)
         return {}
 
-    event = str(state.get("event") or "")
+    try:
+        current_event = validate_event(state.get("event"))
+    except Exception:
+        current_event = empty_event()
+
     evidence = _format_evidence_items(state.get("evidence"))
     similar_block = _format_similar_events(state.get("similar_events"))
     issue_block = _format_issues(state.get("issues"))
@@ -76,27 +86,45 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         "- Fix ONLY what the verifier issues point to (wrong type, unsupported facts, bad structure).\n"
         "- Preserve correct fields and any correct subfields inside `arguments` unchanged; do not rewrite them.\n"
         "- For factual fixes, use External evidence; for shape/granularity, follow Similar events patterns.\n"
-        "- Output the COMPLETE JSON object (event_type, trigger, arguments) after repair, not a patch or diff.\n"
+        "- Output the COMPLETE JSON object (event_type, trigger, arguments object) after repair, not a patch or diff.\n"
         "No markdown fences or commentary.\n\n"
         f"External evidence:\n{evidence}\n\n"
         f"Similar events (structural patterns):\n{similar_block}\n\n"
         f"Verifier issues:\n{issue_block}\n\n"
-        f"Current event (JSON string):\n{event}"
-    )
-
-    raw = _msg_text(_get_llm().invoke([HumanMessage(content=prompt)]).content).strip()
-    raw = re.sub(
-        r"^```(?:json)?\s*|\s*```$",
-        "",
-        raw,
-        flags=re.IGNORECASE | re.DOTALL,
+        f"Current event (JSON object):\n{json.dumps(current_event, ensure_ascii=False)}"
     )
 
     attempts = int(state.get("repair_attempts") or 0) + 1
-    return {
-        "event": raw.strip(),
-        "repair_attempts": attempts,
-    }
+    try:
+        raw = _msg_text(_get_llm().invoke([HumanMessage(content=prompt)]).content).strip()
+        raw = re.sub(
+            r"^```(?:json)?\s*|\s*```$",
+            "",
+            raw,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        repaired_event = parse_event_json(raw)
+        result = {
+            "event": repaired_event,
+            "repair_attempts": attempts,
+        }
+        log_node_event(
+            "repair",
+            state,
+            started_at,
+            True,
+            repair_attempts=attempts,
+            event_type=repaired_event["event_type"],
+        )
+        return result
+    except Exception as exc:
+        fallback_event = current_event
+        result = {
+            "event": fallback_event,
+            "repair_attempts": attempts,
+        }
+        log_node_event("repair", state, started_at, False, error=str(exc), repair_attempts=attempts)
+        return result
 
 
 run = repair

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import mm_event_agent.graph as graph
+from mm_event_agent.schemas import empty_event, empty_fusion_context
 from mm_event_agent.vector_store import build_index
 
 # Local RAG corpus: similar-event patterns / few-shot examples, not current news facts.
@@ -31,10 +32,11 @@ def main() -> None:
         "text": "A bomb exploded in a market",
         "image_desc": "people running, smoke",
         "perception_summary": "",
+        "search_query": "",
         "similar_events": [],
         "evidence": [],
-        "fusion_context": {},
-        "event": "",
+        "fusion_context": empty_fusion_context(),
+        "event": empty_event(),
         "memory": [],
         # Control fields
         "verified": False,
