@@ -6,6 +6,8 @@ import json
 import re
 from typing import Any, TypedDict
 
+from mm_event_agent.ontology import is_supported_event_type
+
 
 class ValidationError(ValueError):
     """Raised when a payload does not match the expected schema."""
@@ -31,7 +33,8 @@ class TextArgument(TypedDict):
 class ImageArgument(TypedDict):
     role: str
     label: str
-    bbox: list[float]
+    bbox: list[float] | None
+    grounding_status: str
 
 
 class Event(TypedDict):
@@ -113,6 +116,8 @@ def validate_event(data: Any) -> Event:
 
     if not isinstance(event_type, str):
         raise ValidationError("event.event_type must be a string")
+    if not is_supported_event_type(event_type.strip()):
+        raise ValidationError("event.event_type must be in the supported ontology")
     if trigger is not None and not isinstance(trigger, dict):
         raise ValidationError("event.trigger must be an object or null")
     if not isinstance(text_arguments, list):
@@ -139,7 +144,7 @@ def parse_event_json(text: str) -> Event:
     return validate_event(data)
 
 
-def attach_text_spans(event: Event, raw_text: str) -> Event:
+def enforce_strict_text_grounding(event: Event, raw_text: str) -> Event:
     anchor_spans: list[TextSpan] = []
     trigger = event["trigger"]
     if trigger is not None:
@@ -173,6 +178,11 @@ def attach_text_spans(event: Event, raw_text: str) -> Event:
         "text_arguments": text_arguments,
         "image_arguments": event["image_arguments"],
     }
+
+
+def attach_text_spans(event: Event, raw_text: str) -> Event:
+    """Backward-compatible alias for strict text grounding post-processing."""
+    return enforce_strict_text_grounding(event, raw_text)
 
 
 def validate_evidence_item(data: Any) -> EvidenceItem:
@@ -252,22 +262,33 @@ def _validate_image_argument(data: Any) -> ImageArgument:
     role = data.get("role")
     label = data.get("label")
     bbox = data.get("bbox")
+    grounding_status = data.get("grounding_status")
     if not isinstance(role, str) or not role.strip():
         raise ValidationError("image argument role must be a non-empty string")
     if not isinstance(label, str) or not label.strip():
         raise ValidationError("image argument label must be a non-empty string")
-    if not isinstance(bbox, list) or len(bbox) != 4:
-        raise ValidationError("image argument bbox must be a list of four numbers")
-    norm_bbox: list[float] = []
-    for value in bbox:
-        try:
-            norm_bbox.append(float(value))
-        except (TypeError, ValueError) as exc:
-            raise ValidationError("image argument bbox values must be numeric") from exc
+    if not isinstance(grounding_status, str) or not grounding_status.strip():
+        raise ValidationError("image argument grounding_status must be a non-empty string")
+
+    norm_bbox: list[float] | None
+    if bbox is None:
+        if grounding_status != "unresolved":
+            raise ValidationError("image argument without bbox must be marked unresolved")
+        norm_bbox = None
+    else:
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            raise ValidationError("image argument bbox must be a list of four numbers or null")
+        norm_bbox = []
+        for value in bbox:
+            try:
+                norm_bbox.append(float(value))
+            except (TypeError, ValueError) as exc:
+                raise ValidationError("image argument bbox values must be numeric") from exc
     return {
         "role": role.strip(),
         "label": label.strip(),
         "bbox": norm_bbox,
+        "grounding_status": grounding_status.strip(),
     }
 
 

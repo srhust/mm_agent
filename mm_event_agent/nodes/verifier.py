@@ -10,6 +10,11 @@ from typing import Any, Mapping
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
+from mm_event_agent.ontology import (
+    get_allowed_image_roles,
+    get_allowed_text_roles,
+    is_supported_event_type,
+)
 from mm_event_agent.observability import log_node_event
 from mm_event_agent.schemas import (
     VerificationDiagnostic,
@@ -149,6 +154,58 @@ def _validate_trigger_fields(
     return issues, diagnostics
 
 
+def _validate_event_type_and_roles(
+    event: Mapping[str, Any],
+) -> tuple[list[str], list[VerificationDiagnostic]]:
+    issues: list[str] = []
+    diagnostics: list[VerificationDiagnostic] = []
+    event_type = str(event.get("event_type") or "").strip()
+    if not is_supported_event_type(event_type):
+        issues.append("invalid event_type for ontology")
+        diagnostics.append(
+            {
+                "field_path": "event_type",
+                "issue_type": "unsupported_event_type",
+                "suggested_action": "set_supported_event_type",
+            }
+        )
+        return issues, diagnostics
+
+    allowed_text_roles = set(get_allowed_text_roles(event_type))
+    allowed_image_roles = set(get_allowed_image_roles(event_type))
+
+    text_arguments = event.get("text_arguments")
+    if isinstance(text_arguments, list):
+        for index, item in enumerate(text_arguments):
+            if isinstance(item, dict):
+                role = str(item.get("role") or "").strip()
+                if role and role not in allowed_text_roles:
+                    issues.append(f"invalid text role at index {index}")
+                    diagnostics.append(
+                        {
+                            "field_path": f"text_arguments[{index}].role",
+                            "issue_type": "invalid_role",
+                            "suggested_action": "replace_or_drop",
+                        }
+                    )
+
+    image_arguments = event.get("image_arguments")
+    if isinstance(image_arguments, list):
+        for index, item in enumerate(image_arguments):
+            if isinstance(item, dict):
+                role = str(item.get("role") or "").strip()
+                if role and role not in allowed_image_roles:
+                    issues.append(f"invalid image role at index {index}")
+                    diagnostics.append(
+                        {
+                            "field_path": f"image_arguments[{index}].role",
+                            "issue_type": "invalid_role",
+                            "suggested_action": "replace_or_drop",
+                        }
+                    )
+    return issues, diagnostics
+
+
 def _validate_text_argument_fields(
     event: Mapping[str, Any],
     raw_text: str,
@@ -227,6 +284,7 @@ def _validate_image_argument_fields(event: Mapping[str, Any]) -> tuple[list[str]
         role = item.get("role")
         label = item.get("label")
         bbox = item.get("bbox")
+        grounding_status = item.get("grounding_status")
         if not isinstance(role, str) or not role.strip():
             issues.append(f"invalid image argument role at index {index}")
             diagnostics.append(
@@ -245,6 +303,17 @@ def _validate_image_argument_fields(event: Mapping[str, Any]) -> tuple[list[str]
                     "suggested_action": "fill_or_drop",
                 }
             )
+        if bbox is None:
+            if grounding_status != "unresolved":
+                issues.append(f"image argument unresolved grounding missing at index {index}")
+                diagnostics.append(
+                    {
+                        "field_path": f"image_arguments[{index}].grounding_status",
+                        "issue_type": "invalid_grounding_status",
+                        "suggested_action": "mark_unresolved_or_drop",
+                    }
+                )
+            continue
         if not isinstance(bbox, list) or len(bbox) != 4:
             issues.append(f"invalid image argument bbox format at index {index}")
             diagnostics.append(
@@ -283,12 +352,15 @@ def _collect_field_level_issues(
         ]
     issues: list[str] = []
     diagnostics: list[VerificationDiagnostic] = []
+    ontology_issues, ontology_diagnostics = _validate_event_type_and_roles(raw_event)
     trigger_issues, trigger_diagnostics = _validate_trigger_fields(raw_event, raw_text)
     text_issues, text_diagnostics = _validate_text_argument_fields(raw_event, raw_text)
     image_issues, image_diagnostics = _validate_image_argument_fields(raw_event)
+    issues.extend(ontology_issues)
     issues.extend(trigger_issues)
     issues.extend(text_issues)
     issues.extend(image_issues)
+    diagnostics.extend(ontology_diagnostics)
     diagnostics.extend(trigger_diagnostics)
     diagnostics.extend(text_diagnostics)
     diagnostics.extend(image_diagnostics)
@@ -352,14 +424,16 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
     prompt = (
         "You verify an extracted event JSON against the SAME structured fusion_context used at extraction time.\n\n"
         "Checks:\n"
-        "1) Text support: Are event.trigger.text and event.text_arguments supported by fusion_context.raw_text? "
+        "1) Ontology: Is event.event_type in the supported ontology and are text/image roles valid for that event_type?\n"
+        "2) Text support: Are event.trigger.text and event.text_arguments supported by fusion_context.raw_text? "
         "Check quoted text and spans.\n"
-        "2) Image support: Are event.image_arguments supported by fusion_context.raw_image_desc?\n"
-        "3) Evidence support: Are event claims supported by fusion_context.evidence item snippets when evidence items are available? "
+        "3) Image support: Are event.image_arguments supported by fusion_context.raw_image_desc? "
+        'Unresolved image arguments are allowed only when grounding_status is "unresolved".\n'
+        "4) Evidence support: Are event claims supported by fusion_context.evidence item snippets when evidence items are available? "
         "Use evidence snippets as the primary factual basis for externally supported facts.\n"
-        "4) Structure: Is the event schema valid, including trigger/text_arguments/image_arguments shape and types, and is it consistent with "
+        "5) Structure: Is the event schema valid, including trigger/text_arguments/image_arguments shape and types, and is it consistent with "
         "fusion_context.patterns when patterns are available?\n"
-        "5) If text, image, and evidence conflict with patterns, prefer grounded support over patterns.\n\n"
+        "6) If text, image, and evidence conflict with patterns, prefer grounded support over patterns.\n\n"
         "Return ONLY one JSON object (no markdown), exactly this shape:\n"
         '{"verdict": "YES" or "NO", "issues": ["unsupported argument", "wrong event type", ...], "confidence": 0.0, "reason": "short explanation", "diagnostics": [{"field_path": "trigger.span", "issue_type": "span_mismatch", "suggested_action": "realign_or_drop"}]}\n'
         "Use an empty issues array when verdict is YES. Confidence must be a float from 0 to 1. "

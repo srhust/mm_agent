@@ -7,6 +7,7 @@ from unittest.mock import patch
 from mm_event_agent.graph import build_graph
 from mm_event_agent.nodes.extraction import extraction
 from mm_event_agent.nodes.fusion import fusion
+from mm_event_agent.nodes.repair import repair
 from mm_event_agent.nodes.search import search
 from mm_event_agent.nodes.verifier import verifier
 from mm_event_agent.schemas import (
@@ -16,6 +17,8 @@ from mm_event_agent.schemas import (
     empty_fusion_context,
     find_all_text_occurrences,
     find_text_span,
+    enforce_strict_text_grounding,
+    validate_event,
 )
 
 
@@ -74,8 +77,9 @@ class SmokeTests(unittest.TestCase):
             "mm_event_agent.nodes.extraction._get_llm",
             return_value=FakeLLM(
                 [
-                    '{"event_type":"explosion","trigger":{"text":"exploded","modality":"text","span":null},'
-                    '"text_arguments":[{"role":"location","text":"market","span":null}],"image_arguments":[]}'
+                    '{"event_type":"explosion"}',
+                    '{"trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[{"role":"location","text":"market","span":null}]}',
+                    '{"image_arguments":[{"role":"smoke","label":"smoke plume","bbox":null,"grounding_status":"unresolved"}]}',
                 ]
             ),
         ), patch(
@@ -92,6 +96,8 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(final["event"]["trigger"]["span"], {"start": 7, "end": 15})
         self.assertEqual(final["event"]["text_arguments"][0]["text"], "market")
         self.assertEqual(final["event"]["text_arguments"][0]["span"], {"start": 21, "end": 27})
+        self.assertEqual(final["event"]["image_arguments"][0]["bbox"], None)
+        self.assertEqual(final["event"]["image_arguments"][0]["grounding_status"], "unresolved")
         self.assertEqual(final["search_query"], "A bomb exploded in a market")
         self.assertEqual(len(final["evidence"]), 1)
 
@@ -207,6 +213,53 @@ class SmokeTests(unittest.TestCase):
         )
         self.assertEqual(aligned["image_arguments"], [{"role": "smoke", "label": "smoke plume", "bbox": [0, 1, 2, 3]}])
 
+    def test_strict_text_grounding_removes_null_span_text_fields(self) -> None:
+        grounded = enforce_strict_text_grounding(
+            {
+                "event_type": "explosion",
+                "trigger": {"text": "exploded", "modality": "text", "span": None},
+                "text_arguments": [
+                    {"role": "location", "text": "market", "span": None},
+                    {"role": "device", "text": "pipe bomb", "span": None},
+                ],
+                "image_arguments": [],
+            },
+            "A bomb exploded in a market",
+        )
+
+        self.assertEqual(grounded["trigger"]["span"], {"start": 7, "end": 15})
+        self.assertEqual(grounded["text_arguments"], [{"role": "location", "text": "market", "span": {"start": 21, "end": 27}}])
+
+    def test_repair_drops_text_argument_when_exact_alignment_fails(self) -> None:
+        state = make_state()
+        state["text"] = "A bomb exploded in a market"
+        state["event"] = {
+            "event_type": "explosion",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
+            "text_arguments": [{"role": "location", "text": "market", "span": {"start": 21, "end": 27}}],
+            "image_arguments": [],
+        }
+        state["verifier_diagnostics"] = [
+            {
+                "field_path": "text_arguments[0].text",
+                "issue_type": "span_mismatch",
+                "suggested_action": "realign_or_drop",
+            }
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.repair._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"explosion","trigger":{"text":"exploded","modality":"text","span":null},'
+                    '"text_arguments":[{"role":"location","text":"downtown","span":null}],"image_arguments":[]}'
+                ]
+            ),
+        ):
+            result = repair(state)
+
+        self.assertEqual(result["event"]["text_arguments"], [])
+
     def test_validate_event_normalizes_legacy_list_span(self) -> None:
         from mm_event_agent.schemas import validate_event
 
@@ -221,6 +274,147 @@ class SmokeTests(unittest.TestCase):
 
         self.assertEqual(normalized["trigger"]["span"], {"start": 7, "end": 15})
         self.assertEqual(normalized["text_arguments"][0]["span"], {"start": 21, "end": 27})
+
+    def test_repair_only_trigger_span_diagnosed_preserves_non_trigger_fields(self) -> None:
+        state = make_state()
+        state["text"] = "A bomb exploded in a market"
+        state["event"] = {
+            "event_type": "explosion",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 4}},
+            "text_arguments": [{"role": "location", "text": "market", "span": {"start": 21, "end": 27}}],
+            "image_arguments": [{"role": "smoke", "label": "smoke plume", "bbox": None, "grounding_status": "unresolved"}],
+        }
+        state["verifier_diagnostics"] = [
+            {"field_path": "trigger.span", "issue_type": "span_mismatch", "suggested_action": "realign_or_drop"}
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.repair._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"explosion","trigger":{"text":"exploded","modality":"text","span":null},'
+                    '"text_arguments":[{"role":"location","text":"CHANGED","span":null}],"image_arguments":[{"role":"smoke","label":"changed","bbox":null,"grounding_status":"unresolved"}]}'
+                ]
+            ),
+        ):
+            result = repair(state)
+
+        self.assertEqual(result["event"]["trigger"]["span"], {"start": 7, "end": 15})
+        self.assertEqual(result["event"]["text_arguments"], state["event"]["text_arguments"])
+        self.assertEqual(result["event"]["image_arguments"], state["event"]["image_arguments"])
+
+    def test_repair_only_one_text_argument_span_diagnosed_preserves_other_arguments(self) -> None:
+        state = make_state()
+        state["text"] = "A bomb exploded in a market near noon"
+        state["event"] = {
+            "event_type": "explosion",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
+            "text_arguments": [
+                {"role": "location", "text": "market", "span": {"start": 0, "end": 6}},
+                {"role": "time", "text": "noon", "span": {"start": 31, "end": 35}},
+            ],
+            "image_arguments": [],
+        }
+        state["verifier_diagnostics"] = [
+            {
+                "field_path": "text_arguments[0].span",
+                "issue_type": "span_mismatch",
+                "suggested_action": "realign_or_drop",
+            }
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.repair._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"explosion","trigger":{"text":"changed","modality":"text","span":null},'
+                    '"text_arguments":[{"role":"location","text":"market","span":null},{"role":"time","text":"changed","span":null}],"image_arguments":[]}'
+                ]
+            ),
+        ):
+            result = repair(state)
+
+        self.assertEqual(result["event"]["text_arguments"][0]["span"], {"start": 21, "end": 27})
+        self.assertEqual(result["event"]["text_arguments"][1]["role"], state["event"]["text_arguments"][1]["role"])
+        self.assertEqual(result["event"]["text_arguments"][1]["text"], state["event"]["text_arguments"][1]["text"])
+        self.assertEqual(result["event"]["text_arguments"][1]["span"], {"start": 33, "end": 37})
+        self.assertEqual(result["event"]["trigger"], state["event"]["trigger"])
+
+    def test_repair_only_one_image_bbox_diagnosed_preserves_unrelated_fields(self) -> None:
+        state = make_state()
+        state["event"] = {
+            "event_type": "explosion",
+            "trigger": None,
+            "text_arguments": [{"role": "location", "text": "market", "span": {"start": 21, "end": 27}}],
+            "image_arguments": [
+                {"role": "smoke", "label": "smoke plume", "bbox": None, "grounding_status": "unresolved"},
+                {"role": "crowd", "label": "people", "bbox": [2, 2, 3, 3], "grounding_status": "grounded"},
+            ],
+        }
+        state["verifier_diagnostics"] = [
+            {
+                "field_path": "image_arguments[1].bbox",
+                "issue_type": "invalid_bbox_format",
+                "suggested_action": "fix_or_drop",
+            }
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.repair._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"changed","trigger":{"text":"exploded","modality":"text","span":null},'
+                    '"text_arguments":[{"role":"location","text":"changed","span":null}],"image_arguments":[{"role":"smoke","label":"changed","bbox":null,"grounding_status":"unresolved"},{"role":"crowd","label":"people","bbox":[10,11,12,13],"grounding_status":"grounded"}]}'
+                ]
+            ),
+        ):
+            result = repair(state)
+
+        self.assertEqual(result["event"]["image_arguments"][1]["bbox"], [10.0, 11.0, 12.0, 13.0])
+        self.assertEqual(result["event"]["image_arguments"][0], state["event"]["image_arguments"][0])
+        self.assertEqual(result["event"]["text_arguments"], state["event"]["text_arguments"])
+        self.assertEqual(result["event"]["event_type"], state["event"]["event_type"])
+
+    def test_extraction_rejects_unsupported_closed_set_event_type(self) -> None:
+        state = make_state()
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(['{"event_type":"attack"}']),
+        ):
+            result = extraction(state)
+        self.assertEqual(result["event"], empty_event())
+
+    def test_image_arguments_without_bbox_must_be_explicitly_unresolved(self) -> None:
+        valid = validate_event(
+            {
+                "event_type": "explosion",
+                "trigger": None,
+                "text_arguments": [],
+                "image_arguments": [
+                    {"role": "smoke", "label": "smoke plume", "bbox": None, "grounding_status": "unresolved"}
+                ],
+            }
+        )
+        self.assertEqual(valid["image_arguments"][0]["grounding_status"], "unresolved")
+
+        with self.assertRaises(Exception):
+            validate_event(
+                {
+                    "event_type": "explosion",
+                    "trigger": None,
+                    "text_arguments": [],
+                    "image_arguments": [
+                        {"role": "smoke", "label": "smoke plume", "bbox": None, "grounding_status": "grounded"}
+                    ],
+                }
+            )
 
 
 if __name__ == "__main__":
