@@ -11,6 +11,8 @@ from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 from mm_event_agent.ontology import (
+    format_event_schema_for_prompt,
+    format_full_ontology_for_prompt,
     get_allowed_image_roles,
     get_allowed_text_roles,
     is_supported_event_type,
@@ -407,6 +409,7 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         )
     raw_text = str(fusion_context.get("raw_text") or "")
     raw_event = state.get("event")
+    raw_event_type = str(raw_event.get("event_type") or "").strip() if isinstance(raw_event, dict) else ""
     field_issues, field_diagnostics = _collect_field_level_issues(raw_event, raw_text)
     try:
         event = validate_event(raw_event)
@@ -421,10 +424,21 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         )
         event = empty_event()
 
+    ontology_block = format_full_ontology_for_prompt()
+    if is_supported_event_type(raw_event_type):
+        selected_schema_block = format_event_schema_for_prompt(raw_event_type)
+    else:
+        selected_schema_block = "(event_type is missing or unsupported)"
+
     prompt = (
         "You verify an extracted event JSON against the SAME structured fusion_context used at extraction time.\n\n"
+        "Ontology semantics:\n"
+        f"{ontology_block}\n\n"
+        "Predicted event_type schema focus:\n"
+        f"{selected_schema_block}\n\n"
         "Checks:\n"
-        "1) Ontology: Is event.event_type in the supported ontology and are text/image roles valid for that event_type?\n"
+        "1) Ontology: Is event.event_type in the supported ontology, does it semantically match the event definition and trigger hints, and are text/image roles valid for that event_type?\n"
+        "Use the role definitions and extraction notes to decide whether arguments fit the intended meaning of each role.\n"
         "2) Text support: Are event.trigger.text and event.text_arguments supported by fusion_context.raw_text? "
         "Check quoted text and spans.\n"
         "3) Image support: Are event.image_arguments supported by fusion_context.raw_image_desc? "

@@ -12,6 +12,12 @@ from typing import Any, Mapping
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
+from mm_event_agent.ontology import (
+    get_allowed_image_roles,
+    get_allowed_text_roles,
+    get_supported_event_types,
+    is_supported_event_type,
+)
 from mm_event_agent.observability import log_node_event
 from mm_event_agent.schemas import (
     empty_event,
@@ -228,6 +234,19 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
     target_field_paths = _collect_target_field_paths(state.get("verifier_diagnostics"))
     target_field_summary = _summarize_target_field_paths(target_field_paths)
     raw_text = str(state.get("text") or "")
+    supported_event_types = get_supported_event_types()
+    current_event_type = str(current_event.get("event_type") or "").strip()
+    if is_supported_event_type(current_event_type):
+        ontology_guidance = (
+            f"Supported event types: {json.dumps(supported_event_types, ensure_ascii=False)}\n"
+            f"Current event_type text roles: {json.dumps(get_allowed_text_roles(current_event_type), ensure_ascii=False)}\n"
+            f"Current event_type image roles: {json.dumps(get_allowed_image_roles(current_event_type), ensure_ascii=False)}"
+        )
+    else:
+        ontology_guidance = (
+            f"Supported event types: {json.dumps(supported_event_types, ensure_ascii=False)}\n"
+            "Current event_type is invalid; choose one supported event_type and use only that type's roles."
+        )
 
     prompt = (
         "Repair the extracted event JSON with MINIMAL changes.\n"
@@ -237,6 +256,9 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         "- Do not rewrite unrelated arguments.\n"
         "- Fix ONLY what the verifier issues point to (wrong type, unsupported facts, bad structure).\n"
         "- For factual fixes, use External evidence; for shape/granularity, follow Similar events patterns.\n"
+        "- event_type must stay within the supported closed ontology.\n"
+        "- text_arguments roles must be valid for the chosen event_type.\n"
+        "- image_arguments roles must be valid for the chosen event_type.\n"
         "- Output the COMPLETE JSON object using this schema: event_type, trigger, text_arguments, image_arguments.\n"
         '- trigger must be {"text": string, "modality": "text", "span": null} or null.\n'
         '- text_arguments items must be {"role": string, "text": string, "span": null}.\n'
@@ -244,6 +266,7 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         "- Keep trigger.text and text_arguments[].text copied from the original text when possible; do not paraphrase.\n"
         "- Use verifier diagnostics for targeted repair when available; prefer local fixes over full regeneration.\n"
         "No markdown fences or commentary.\n\n"
+        f"Ontology:\n{ontology_guidance}\n\n"
         f"External evidence:\n{evidence}\n\n"
         f"Similar events (structural patterns):\n{similar_block}\n\n"
         f"Original text:\n{raw_text}\n\n"

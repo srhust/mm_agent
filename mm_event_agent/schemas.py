@@ -6,7 +6,11 @@ import json
 import re
 from typing import Any, TypedDict
 
-from mm_event_agent.ontology import is_supported_event_type
+from mm_event_agent.ontology import (
+    get_allowed_image_roles,
+    get_allowed_text_roles,
+    is_supported_event_type,
+)
 
 
 class ValidationError(ValueError):
@@ -125,12 +129,17 @@ def validate_event(data: Any) -> Event:
     if not isinstance(image_arguments, list):
         raise ValidationError("event.image_arguments must be a list")
 
+    normalized_event_type = event_type.strip()
     normalized_trigger = _validate_trigger(trigger)
-    normalized_text_arguments = [_validate_text_argument(item) for item in text_arguments]
-    normalized_image_arguments = [_validate_image_argument(item) for item in image_arguments]
+    normalized_text_arguments = [
+        _validate_text_argument(item, normalized_event_type) for item in text_arguments
+    ]
+    normalized_image_arguments = [
+        _validate_image_argument(item, normalized_event_type) for item in image_arguments
+    ]
 
     return {
-        "event_type": event_type.strip(),
+        "event_type": normalized_event_type,
         "trigger": normalized_trigger,
         "text_arguments": normalized_text_arguments,
         "image_arguments": normalized_image_arguments,
@@ -239,7 +248,7 @@ def _validate_trigger(data: Any) -> Trigger | None:
     }
 
 
-def _validate_text_argument(data: Any) -> TextArgument:
+def _validate_text_argument(data: Any, event_type: str) -> TextArgument:
     if not isinstance(data, dict):
         raise ValidationError("event.text_arguments items must be objects")
     role = data.get("role")
@@ -249,14 +258,17 @@ def _validate_text_argument(data: Any) -> TextArgument:
         raise ValidationError("text argument role must be a non-empty string")
     if not isinstance(text, str) or not text.strip():
         raise ValidationError("text argument text must be a non-empty string")
+    normalized_role = role.strip()
+    if normalized_role not in get_allowed_text_roles(event_type):
+        raise ValidationError(f'text argument role "{normalized_role}" is not allowed for event.event_type')
     return {
-        "role": role.strip(),
+        "role": normalized_role,
         "text": text,
         "span": _validate_span(span),
     }
 
 
-def _validate_image_argument(data: Any) -> ImageArgument:
+def _validate_image_argument(data: Any, event_type: str) -> ImageArgument:
     if not isinstance(data, dict):
         raise ValidationError("event.image_arguments items must be objects")
     role = data.get("role")
@@ -269,6 +281,9 @@ def _validate_image_argument(data: Any) -> ImageArgument:
         raise ValidationError("image argument label must be a non-empty string")
     if not isinstance(grounding_status, str) or not grounding_status.strip():
         raise ValidationError("image argument grounding_status must be a non-empty string")
+    normalized_role = role.strip()
+    if normalized_role not in get_allowed_image_roles(event_type):
+        raise ValidationError(f'image argument role "{normalized_role}" is not allowed for event.event_type')
 
     norm_bbox: list[float] | None
     if bbox is None:
@@ -285,7 +300,7 @@ def _validate_image_argument(data: Any) -> ImageArgument:
             except (TypeError, ValueError) as exc:
                 raise ValidationError("image argument bbox values must be numeric") from exc
     return {
-        "role": role.strip(),
+        "role": normalized_role,
         "label": label.strip(),
         "bbox": norm_bbox,
         "grounding_status": grounding_status.strip(),

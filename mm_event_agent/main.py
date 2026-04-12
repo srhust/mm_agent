@@ -9,16 +9,16 @@ from mm_event_agent.vector_store import build_index
 # Local RAG corpus: similar-event patterns / few-shot examples, not current news facts.
 RAG_EVENT_CORPUS = [
     (
-        '{"event_type":"explosion","trigger":"improvised explosive device detonated",'
-        '"arguments":{"location":"public market","perpetrator":"unknown","casualties":"multiple"}}'
+        '{"event_type":"Conflict:Attack","trigger":"detonated",'
+        '"arguments":{"Place":"public market","Instrument":"improvised explosive device","Target":"market"}}'
     ),
     (
-        '{"event_type":"explosion","trigger":"gas leak ignition",'
-        '"arguments":{"location":"residential building","cause":"gas","casualties":"unknown"}}'
+        '{"event_type":"Life:Die","trigger":"killed",'
+        '"arguments":{"Victim":"civilian","Place":"residential building","Instrument":"fire"}}'
     ),
     (
-        "Pattern: explosion + market/crowded place -> arguments often include location, device/cause, "
-        "casualties, emergency response."
+        "Pattern: conflict attack reports often include Attacker, Target, Instrument, and Place; "
+        "death reports often include Victim, Agent or Instrument, and Place."
     ),
 ]
 

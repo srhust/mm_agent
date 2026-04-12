@@ -1,4 +1,4 @@
-"""Data node: extract one structured event JSON from fusion_context only."""
+"""Data node: staged multimodal extraction from fusion_context only."""
 
 from __future__ import annotations
 
@@ -10,7 +10,13 @@ from typing import Any, Mapping
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
-from mm_event_agent.ontology import get_allowed_image_roles, get_allowed_text_roles, get_supported_event_types
+from mm_event_agent.ontology import (
+    format_event_schema_for_prompt,
+    format_full_ontology_for_prompt,
+    get_allowed_image_roles,
+    get_allowed_text_roles,
+    get_supported_event_types,
+)
 from mm_event_agent.observability import log_node_event
 from mm_event_agent.schemas import empty_event, empty_fusion_context, enforce_strict_text_grounding, parse_event_json
 
@@ -44,15 +50,33 @@ def _extract_stage_json(prompt: str) -> dict[str, Any]:
     return parsed
 
 
-def _classify_event_type(raw_text: str, raw_image_desc: str, evidence_items: list[Any]) -> str:
+def _build_image_side_info(raw_image_desc: str, perception_summary: str) -> str:
+    summary = str(perception_summary or "").strip()
+    image_desc = str(raw_image_desc or "").strip()
+    if summary:
+        return f"raw_image_desc: {image_desc}\nperception_summary: {summary}"
+    return f"raw_image_desc: {image_desc}"
+
+
+def _stage_a_select_event_type(
+    raw_text: str,
+    image_side_info: str,
+    evidence_items: list[Any],
+) -> str:
     allowed_event_types = get_supported_event_types()
+    ontology_block = format_full_ontology_for_prompt()
     prompt = (
+        "Stage A: closed-set event type selection.\n"
         "Classify exactly one event_type from this closed set only:\n"
         f"{json.dumps(allowed_event_types, ensure_ascii=False)}\n\n"
-        "Use raw_text, raw_image_desc, and evidence. Prefer evidence when available.\n"
+        "Ontology semantics:\n"
+        f"{ontology_block}\n\n"
+        "Use raw_text, image-side information, and evidence. Prefer evidence when available.\n"
+        "- Use event definitions and trigger hints to choose the best matching event type.\n"
+        "- Do not invent new labels or open-set variants.\n"
         'Return ONLY JSON: {"event_type": "<one of the allowed labels>"}\n\n'
         f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
-        f'"raw_image_desc": {json.dumps(raw_image_desc, ensure_ascii=False)}, '
+        f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
         f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
     )
     parsed = _extract_stage_json(prompt)
@@ -62,18 +86,24 @@ def _classify_event_type(raw_text: str, raw_image_desc: str, evidence_items: lis
     return event_type
 
 
-def _extract_text_fields(
+def _stage_b_extract_text_fields(
     event_type: str,
     raw_text: str,
-    raw_image_desc: str,
+    image_side_info: str,
     evidence_items: list[Any],
 ) -> dict[str, Any]:
     allowed_roles = get_allowed_text_roles(event_type)
+    schema_block = format_event_schema_for_prompt(event_type)
     prompt = (
+        "Stage B: extract text trigger and text arguments from raw_text.\n"
         "Extract text-grounded event fields from raw_text.\n"
-        f"event_type: {event_type}\n"
-        f"allowed text roles: {json.dumps(allowed_roles, ensure_ascii=False)}\n\n"
+        "Ontology semantics:\n"
+        f"{schema_block}\n\n"
         "Requirements:\n"
+        "- event_type is fixed; use only the allowed text roles for this event_type.\n"
+        f"- allowed text roles for this stage: {json.dumps(allowed_roles, ensure_ascii=False)}\n"
+        "- Use the role definitions to decide which extracted mention belongs to which role.\n"
+        "- Use the trigger_hint only as semantic guidance; trigger.text must still be copied from raw_text exactly.\n"
         "- trigger.text must be copied directly from raw_text or trigger must be null.\n"
         "- each text argument text must be copied directly from raw_text.\n"
         "- do not paraphrase trigger or text arguments.\n"
@@ -82,7 +112,7 @@ def _extract_text_fields(
         'Return ONLY JSON: {"trigger": {"text": string, "modality": "text", "span": null} | null, '
         '"text_arguments": [{"role": string, "text": string, "span": null}]}\n\n'
         f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
-        f'"raw_image_desc": {json.dumps(raw_image_desc, ensure_ascii=False)}, '
+        f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
         f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
     )
     parsed = _extract_stage_json(prompt)
@@ -94,28 +124,56 @@ def _extract_text_fields(
     }
 
 
-def _extract_image_arguments(
+def _stage_c_extract_image_arguments(
     event_type: str,
-    raw_image_desc: str,
+    image_side_info: str,
     text_arguments: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     allowed_roles = get_allowed_image_roles(event_type)
+    schema_block = format_event_schema_for_prompt(event_type)
     prompt = (
-        "Extract image argument semantic candidates from raw_image_desc.\n"
-        f"event_type: {event_type}\n"
-        f"allowed image roles: {json.dumps(allowed_roles, ensure_ascii=False)}\n\n"
+        "Stage C: extract image argument semantics from image-side information.\n"
+        "Extract image argument semantic candidates from image-side information.\n"
+        "Ontology semantics:\n"
+        f"{schema_block}\n\n"
         "Requirements:\n"
+        "- event_type is fixed; use only the allowed image roles for this event_type.\n"
+        f"- allowed image roles for this stage: {json.dumps(allowed_roles, ensure_ascii=False)}\n"
+        "- Use the role definitions and extraction notes to map visible evidence to semantic roles.\n"
+        "- condition on the selected event_type and the extracted text arguments.\n"
         "- output semantic image arguments only.\n"
         '- bbox must be null and grounding_status must be "unresolved".\n'
         "- do not pretend to know a precise bbox.\n"
-        "- use role + label only when supported by raw_image_desc.\n"
+        "- use role + label only when supported by image-side information.\n"
         'Return ONLY JSON: {"image_arguments": [{"role": string, "label": string, "bbox": null, "grounding_status": "unresolved"}]}\n\n'
-        f'{{"raw_image_desc": {json.dumps(raw_image_desc, ensure_ascii=False)}, '
+        f'{{"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
         f'"text_arguments": {json.dumps(text_arguments, ensure_ascii=False)}}}'
     )
     parsed = _extract_stage_json(prompt)
     image_arguments = parsed.get("image_arguments")
     return image_arguments if isinstance(image_arguments, list) else []
+
+
+def _run_staged_extraction(
+    raw_text: str,
+    raw_image_desc: str,
+    perception_summary: str,
+    evidence_items: list[Any],
+) -> dict[str, Any]:
+    image_side_info = _build_image_side_info(raw_image_desc, perception_summary)
+    event_type = _stage_a_select_event_type(raw_text, image_side_info, evidence_items)
+    text_fields = _stage_b_extract_text_fields(event_type, raw_text, image_side_info, evidence_items)
+    image_arguments = _stage_c_extract_image_arguments(
+        event_type,
+        image_side_info,
+        text_fields["text_arguments"],
+    )
+    return {
+        "event_type": event_type,
+        "trigger": text_fields["trigger"],
+        "text_arguments": text_fields["text_arguments"],
+        "image_arguments": image_arguments,
+    }
 
 
 def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
@@ -146,15 +204,12 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(evidence_items, list):
         evidence_items = []
     try:
-        event_type = _classify_event_type(raw_text, raw_image_desc, evidence_items)
-        text_fields = _extract_text_fields(event_type, raw_text, raw_image_desc, evidence_items)
-        image_arguments = _extract_image_arguments(event_type, raw_image_desc, text_fields["text_arguments"])
-        assembled_event = {
-            "event_type": event_type,
-            "trigger": text_fields["trigger"],
-            "text_arguments": text_fields["text_arguments"],
-            "image_arguments": image_arguments,
-        }
+        assembled_event = _run_staged_extraction(
+            raw_text,
+            raw_image_desc,
+            perception_summary,
+            evidence_items,
+        )
         event = enforce_strict_text_grounding(
             parse_event_json(json.dumps(assembled_event, ensure_ascii=False)),
             raw_text,
@@ -166,6 +221,7 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             started_at,
             True,
             event_type=event["event_type"],
+            staged=True,
             evidence_used=len(evidence_items),
         )
         return result
@@ -178,6 +234,7 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             started_at,
             False,
             error=str(exc),
+            staged=True,
             evidence_used=len(evidence_items),
         )
         return result
