@@ -10,20 +10,25 @@ from mm_event_agent.schemas import Event, EvidenceItem, FusionContext, Verificat
 class AgentState(TypedDict):
     """State for the multimodal event extraction agent.
 
-    User-facing inputs are raw text plus raw image.
-    The current pipeline still uses image_desc as an intermediate image-side
-    representation until raw-image perception / grounding is implemented.
+    The user-facing input contract is raw text plus raw image.
+    In the graph state, state["text"] stores the raw text input and
+    state["raw_image"] stores the primary image input object.
+    The current pipeline still uses state["image_desc"] as a derived
+    intermediate image-side representation until raw-image perception /
+    grounding is implemented.
     Keep data fields and control fields separate across nodes.
     """
 
     # Data fields: business input, intermediate context, and final output.
+    # Raw user text input.
     text: str
-    # Placeholder for the original raw image input. This can later hold bytes,
-    # a local path, or a URI, but is not consumed for detector grounding yet.
+    # Primary raw user image input. This can hold bytes, a local path, or a URI,
+    # but is not consumed for detector grounding yet.
     raw_image: Any
     # Stage A event type selection mode: "closed_set" or "transfer".
     event_type_mode: str
-    # Current fallback / intermediate representation derived from the image.
+    # Current derived intermediate representation of raw_image used by the
+    # existing image-side extraction and verification path.
     image_desc: str
     perception_summary: str
     search_query: str

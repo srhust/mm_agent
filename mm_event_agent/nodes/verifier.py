@@ -402,7 +402,7 @@ def _merge_diagnostics(
 
 
 def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Read data fields and write only control fields verified/issues/confidence/reason."""
+    """Verify against fused raw_text plus derived raw_image_desc context."""
     started_at = time.perf_counter()
     fusion_context = state.get("fusion_context")
     if not isinstance(fusion_context, dict):
@@ -457,7 +457,7 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         "Pay special attention to the listed closely related role confusions and flag them when the event uses the wrong role despite using an allowed role name.\n"
         "2) Text support: Are event.trigger.text and event.text_arguments supported by fusion_context.raw_text? "
         "Check quoted text and spans.\n"
-        "3) Image support: Are event.image_arguments supported by fusion_context.raw_image_desc? "
+        "3) Image support: Are event.image_arguments supported by fusion_context.raw_image_desc, the current derived representation of the primary raw image input? "
         'Unresolved image arguments are allowed only when grounding_status is "unresolved".\n'
         "4) Evidence support: Are event claims supported by fusion_context.evidence item snippets when evidence items are available? "
         "Use evidence snippets as the primary factual basis for externally supported facts.\n"

@@ -1,8 +1,10 @@
 """Run the LangGraph multimodal event extraction pipeline.
 
 Current input contract: raw text + raw image.
-Current operational image representation: image_desc as an intermediate fallback
-until raw-image grounding is implemented.
+In graph state, the raw text input lives in state["text"] and the primary raw
+image input lives in state["raw_image"].
+Current operational image representation: image_desc remains a derived
+intermediate fallback until raw-image grounding is implemented.
 """
 
 from __future__ import annotations
@@ -33,10 +35,11 @@ def main() -> None:
 
     g = graph.build_graph()
     state = {
-        # Data fields: original inputs plus current intermediate representations.
+        # Data fields: raw user inputs plus current intermediate representations.
         "text": "A bomb exploded in a market",
-        "raw_image": None,
+        "raw_image": "example://images/market-scene.jpg",
         "event_type_mode": "closed_set",
+        # image_desc is currently derived from raw_image outside this demo entry.
         "image_desc": "people running, smoke",
         "perception_summary": "",
         "search_query": "",

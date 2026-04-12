@@ -1,8 +1,8 @@
 """Data node: merge raw text plus image-side description into perception_summary.
 
 The original user image is carried in state["raw_image"], but the current
-pipeline still summarizes image information through state["image_desc"] as an
-intermediate representation. Raw-image perception / detector grounding is not
+pipeline still summarizes image information through state["image_desc"], a
+derived intermediate representation. Raw-image perception / detector grounding is not
 implemented here yet.
 """
 
@@ -15,7 +15,7 @@ from mm_event_agent.observability import log_node_event
 
 
 def perception(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Read text plus image_desc and write the intermediate perception summary."""
+    """Read raw text plus derived image_desc and write perception_summary."""
     started_at = time.perf_counter()
     try:
         text = "" if state.get("text") is None else str(state.get("text"))

@@ -41,6 +41,13 @@ class ImageArgument(TypedDict):
     grounding_status: str
 
 
+class GroundingRequest(TypedDict):
+    role: str
+    label: str
+    grounding_query: str
+    grounding_status: str
+
+
 class Event(TypedDict):
     event_type: str
     trigger: Trigger | None
@@ -65,7 +72,8 @@ class VerificationDiagnostic(TypedDict):
 
 class FusionContext(TypedDict):
     raw_text: str
-    # Current image-side intermediate representation, not the original raw image.
+    # Current image-side intermediate representation derived from raw_image,
+    # not the original raw image object itself.
     raw_image_desc: str
     perception_summary: str
     patterns: list[dict[str, Any]]
@@ -84,8 +92,10 @@ def empty_event() -> Event:
 def empty_fusion_context() -> FusionContext:
     """Create the current fusion context.
 
-    raw_image_desc is the normalized image-side description used today.
-    The original raw image travels separately in the global state.
+    raw_text and raw_image are the primary user inputs at graph entry.
+    fusion_context.raw_image_desc stores the derived image description used by
+    the current downstream extraction / verification path.
+    The original raw_image continues to travel separately in the global state.
     """
     return {
         "raw_text": "",
@@ -198,6 +208,56 @@ def enforce_strict_text_grounding(event: Event, raw_text: str) -> Event:
 def attach_text_spans(event: Event, raw_text: str) -> Event:
     """Backward-compatible alias for strict text grounding post-processing."""
     return enforce_strict_text_grounding(event, raw_text)
+
+
+def image_argument_needs_grounding(data: Any) -> bool:
+    """Return True when an image argument is still unresolved and detector-ready."""
+    if not isinstance(data, dict):
+        return False
+    role = str(data.get("role") or "").strip()
+    label = str(data.get("label") or "").strip()
+    bbox = data.get("bbox")
+    grounding_status = str(data.get("grounding_status") or "").strip()
+    return bool(role and label and bbox is None and grounding_status == "unresolved")
+
+
+def build_grounding_query(role: str, label: str) -> str:
+    """Build a lightweight detector-facing query from semantic role + label."""
+    normalized_role = str(role or "").strip()
+    normalized_label = str(label or "").strip()
+    if normalized_role and normalized_label:
+        return f"{normalized_role}: {normalized_label}"
+    return normalized_label or normalized_role
+
+
+def build_grounding_request(image_argument: Any) -> GroundingRequest | None:
+    """Convert one unresolved image argument into a detector-ready request."""
+    if not image_argument_needs_grounding(image_argument):
+        return None
+    role = str(image_argument.get("role") or "").strip()
+    label = str(image_argument.get("label") or "").strip()
+    return {
+        "role": role,
+        "label": label,
+        "grounding_query": build_grounding_query(role, label),
+        "grounding_status": "unresolved",
+    }
+
+
+def build_grounding_requests(event: Any) -> list[GroundingRequest]:
+    """Derive detector-ready requests for unresolved image arguments only."""
+    if not isinstance(event, dict):
+        return []
+    image_arguments = event.get("image_arguments")
+    if not isinstance(image_arguments, list):
+        return []
+
+    requests: list[GroundingRequest] = []
+    for item in image_arguments:
+        request = build_grounding_request(item)
+        if request is not None:
+            requests.append(request)
+    return requests
 
 
 def validate_evidence_item(data: Any) -> EvidenceItem:

@@ -79,6 +79,49 @@ def _format_diagnostics(raw: Any) -> str:
     return "\n".join(lines) if lines else "(none)"
 
 
+def _build_repair_plan(raw: Any) -> list[dict[str, str]]:
+    """Build a lightweight field-local repair plan from verifier diagnostics."""
+    if not isinstance(raw, list):
+        return []
+
+    plan: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        field_path = str(item.get("field_path") or "").strip()
+        issue_type = str(item.get("issue_type") or "").strip()
+        suggested_action = str(item.get("suggested_action") or "").strip()
+        if not field_path:
+            continue
+        key = (field_path, issue_type, suggested_action)
+        if key in seen:
+            continue
+        seen.add(key)
+        plan.append(
+            {
+                "field_path": field_path,
+                "issue_type": issue_type or "unspecified_issue",
+                "suggested_action": suggested_action or "inspect_and_fix_locally",
+            }
+        )
+    return plan
+
+
+def _format_repair_plan(plan: list[dict[str, str]]) -> str:
+    """Format the repair plan so the LLM sees field-local targets explicitly."""
+    if not plan:
+        return "(none)"
+    lines: list[str] = []
+    for item in plan:
+        lines.append(
+            f'- field_path: {item["field_path"]}; '
+            f'issue_type: {item["issue_type"]}; '
+            f'suggested_action: {item["suggested_action"]}'
+        )
+    return "\n".join(lines)
+
+
 def _collect_target_field_paths(raw: Any) -> list[str]:
     if not isinstance(raw, list):
         return []
@@ -231,7 +274,9 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
     similar_block = _format_similar_events(state.get("similar_events"))
     issue_block = _format_issues(state.get("issues"))
     diagnostics_block = _format_diagnostics(state.get("verifier_diagnostics"))
-    target_field_paths = _collect_target_field_paths(state.get("verifier_diagnostics"))
+    repair_plan = _build_repair_plan(state.get("verifier_diagnostics"))
+    repair_plan_block = _format_repair_plan(repair_plan)
+    target_field_paths = _collect_target_field_paths(repair_plan)
     target_field_summary = _summarize_target_field_paths(target_field_paths)
     raw_text = str(state.get("text") or "")
     supported_event_types = get_supported_event_types()
@@ -250,10 +295,11 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
 
     prompt = (
         "Repair the extracted event JSON with MINIMAL changes.\n"
-        "- Use verifier_diagnostics as the PRIMARY repair plan.\n"
-        "- Modify ONLY the fields referenced in verifier_diagnostics.\n"
+        "- Use the repair plan derived from verifier_diagnostics as the PRIMARY repair plan.\n"
+        "- Modify ONLY the diagnosed fields listed in the repair plan.\n"
         "- Preserve all other fields unchanged.\n"
         "- Do not rewrite unrelated arguments.\n"
+        "- If only one field_path is diagnosed, keep every other field exactly as-is.\n"
         "- Fix ONLY what the verifier issues point to (wrong type, unsupported facts, bad structure).\n"
         "- For factual fixes, use External evidence; for shape/granularity, follow Similar events patterns.\n"
         "- event_type must stay within the supported closed ontology.\n"
@@ -272,6 +318,7 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         f"Original text:\n{raw_text}\n\n"
         f"Verifier issues:\n{issue_block}\n\n"
         f"Verifier diagnostics:\n{diagnostics_block}\n\n"
+        f"Repair plan:\n{repair_plan_block}\n\n"
         f"Target field paths:\n{target_field_summary}\n\n"
         f"Current event (JSON object):\n{json.dumps(current_event, ensure_ascii=False)}"
     )

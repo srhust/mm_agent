@@ -13,6 +13,7 @@ from langchain_openai import ChatOpenAI
 from mm_event_agent.ontology import (
     format_event_schema_for_prompt,
     format_full_ontology_for_prompt,
+    format_image_role_visibility_guidance_for_prompt,
     get_allowed_image_roles,
     get_allowed_text_roles,
     get_supported_event_types,
@@ -55,6 +56,8 @@ def _build_image_side_info(raw_image_desc: str, perception_summary: str) -> str:
 
     The raw image itself is not consumed here yet; extraction still operates on
     the derived image description / summary pathway until future grounding work.
+    This keeps the existing extraction behavior runnable while raw_image is the
+    formal primary image input at graph entry.
     """
     summary = str(perception_summary or "").strip()
     image_desc = str(raw_image_desc or "").strip()
@@ -156,17 +159,23 @@ def _stage_c_extract_image_arguments(
 ) -> list[dict[str, Any]]:
     allowed_roles = get_allowed_image_roles(event_type)
     schema_block = format_event_schema_for_prompt(event_type)
+    visibility_block = format_image_role_visibility_guidance_for_prompt(event_type)
     prompt = (
         "Stage C: extract image argument semantics from image-side information.\n"
         "Extract image argument semantic candidates from image-side information.\n"
         "Ontology semantics:\n"
         f"{schema_block}\n\n"
+        "Image-role visibility guidance:\n"
+        f"{visibility_block}\n\n"
         "Requirements:\n"
         "- event_type is fixed; use only the allowed image roles for this event_type.\n"
         f"- allowed image roles for this stage: {json.dumps(allowed_roles, ensure_ascii=False)}\n"
         "- Use the role definitions and extraction notes to map visible evidence to semantic roles.\n"
         "- condition on the selected event_type and the extracted text arguments.\n"
         "- output semantic image arguments only.\n"
+        "- Be conservative: prefer omission over unsupported image-role prediction.\n"
+        "- For visually weaker roles, require direct visual evidence rather than generic scene context.\n"
+        "- Do not output a weakly visible role just because it is semantically allowed by the ontology.\n"
         '- bbox must be null and grounding_status must be "unresolved".\n'
         "- do not pretend to know a precise bbox.\n"
         "- use role + label only when supported by image-side information.\n"
@@ -185,27 +194,35 @@ def _run_staged_extraction(
     perception_summary: str,
     evidence_items: list[Any],
     event_type_mode: str,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     image_side_info = _build_image_side_info(raw_image_desc, perception_summary)
     event_type = _stage_a_select_event_type(raw_text, image_side_info, evidence_items, event_type_mode)
+    stage_a_info = {
+        "stage_a_event_type_mode": str(event_type_mode or "closed_set"),
+        "stage_a_selected_event_type": event_type,
+        "stage_a_selected_unsupported": event_type == "Unsupported",
+    }
     if event_type == "Unsupported":
-        return empty_event()
+        return empty_event(), stage_a_info
     text_fields = _stage_b_extract_text_fields(event_type, raw_text, image_side_info, evidence_items)
     image_arguments = _stage_c_extract_image_arguments(
         event_type,
         image_side_info,
         text_fields["text_arguments"],
     )
-    return {
-        "event_type": event_type,
-        "trigger": text_fields["trigger"],
-        "text_arguments": text_fields["text_arguments"],
-        "image_arguments": image_arguments,
-    }
+    return (
+        {
+            "event_type": event_type,
+            "trigger": text_fields["trigger"],
+            "text_arguments": text_fields["text_arguments"],
+            "image_arguments": image_arguments,
+        },
+        stage_a_info,
+    )
 
 
 def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Read only data field fusion_context and write only data field event."""
+    """Read fusion_context and write event using the current image_desc bridge."""
     started_at = time.perf_counter()
     raw_context = state.get("fusion_context")
     if isinstance(raw_context, dict):
@@ -232,8 +249,13 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
         patterns = []
     if not isinstance(evidence_items, list):
         evidence_items = []
+    stage_a_info = {
+        "stage_a_event_type_mode": event_type_mode,
+        "stage_a_selected_event_type": "",
+        "stage_a_selected_unsupported": False,
+    }
     try:
-        assembled_event = _run_staged_extraction(
+        assembled_event, stage_a_info = _run_staged_extraction(
             raw_text,
             raw_image_desc,
             perception_summary,
@@ -255,6 +277,8 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             True,
             event_type=event["event_type"],
             event_type_mode=event_type_mode,
+            stage_a_selected_event_type=stage_a_info["stage_a_selected_event_type"],
+            stage_a_selected_unsupported=stage_a_info["stage_a_selected_unsupported"],
             staged=True,
             evidence_used=len(evidence_items),
         )
@@ -269,6 +293,8 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             False,
             error=str(exc),
             event_type_mode=event_type_mode,
+            stage_a_selected_event_type=stage_a_info["stage_a_selected_event_type"],
+            stage_a_selected_unsupported=stage_a_info["stage_a_selected_unsupported"],
             staged=True,
             evidence_used=len(evidence_items),
         )

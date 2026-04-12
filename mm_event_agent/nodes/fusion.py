@@ -10,12 +10,14 @@ from mm_event_agent.schemas import FusionContext, empty_fusion_context
 
 
 def fusion(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Read only data fields and write only data field fusion_context."""
+    """Build fusion_context from raw text plus the current derived image_desc."""
     started_at = time.perf_counter()
     try:
         evidence = state.get("evidence")
         fusion_context: FusionContext = {
             "raw_text": str(state.get("text") or ""),
+            # Keep using the derived image description in fusion_context until
+            # raw_image-grounded perception is implemented.
             "raw_image_desc": str(state.get("image_desc") or ""),
             "perception_summary": str(state.get("perception_summary") or ""),
             "patterns": list(state.get("similar_events")) if isinstance(state.get("similar_events"), list) else [],

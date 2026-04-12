@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 
 class EventRoleSchema(TypedDict):
@@ -150,6 +150,54 @@ EVENT_ONTOLOGY: dict[str, EventRoleSchema] = {
     }
 }
 
+IMAGE_ROLE_VISIBILITY_GUIDANCE: dict[str, dict[str, Literal["strong", "weak"]]] = {
+    "Movement:Transport": {
+        "Vehicle": "strong",
+        "Artifact": "strong",
+        "Agent": "weak",
+        "Destination": "weak",
+        "Origin": "weak",
+    },
+    "Conflict:Attack": {
+        "Instrument": "strong",
+        "Target": "strong",
+        "Place": "strong",
+        "Attacker": "weak",
+    },
+    "Conflict:Demonstrate": {
+        "Entity": "strong",
+        "Instrument": "strong",
+        "Place": "strong",
+        "Police": "weak",
+    },
+    "Justice:Arrest-Jail": {
+        "Agent": "strong",
+        "Person": "strong",
+        "Instrument": "strong",
+        "Place": "weak",
+    },
+    "Contact:Phone-Write": {
+        "Instrument": "strong",
+        "Entity": "weak",
+        "Place": "weak",
+    },
+    "Contact:Meet": {
+        "Participant": "strong",
+        "Place": "weak",
+    },
+    "Life:Die": {
+        "Victim": "strong",
+        "Place": "strong",
+        "Instrument": "weak",
+        "Agent": "weak",
+    },
+    "Transaction:Transfer-Money": {
+        "Money": "strong",
+        "Giver": "weak",
+        "Recipient": "weak",
+    },
+}
+
 
 def get_supported_event_types() -> list[str]:
     return list(EVENT_ONTOLOGY.keys())
@@ -188,6 +236,34 @@ def get_event_schema(event_type: str) -> EventRoleSchema | None:
         "role_definitions": dict(schema["role_definitions"]),
         "extraction_notes": list(schema["extraction_notes"]),
     }
+
+
+def get_image_role_visibility_guidance(event_type: str) -> dict[str, Literal["strong", "weak"]]:
+    schema = EVENT_ONTOLOGY.get(event_type)
+    if schema is None:
+        return {}
+
+    configured = IMAGE_ROLE_VISIBILITY_GUIDANCE.get(event_type, {})
+    guidance: dict[str, Literal["strong", "weak"]] = {}
+    for role in schema["image_roles"]:
+        guidance[role] = configured.get(role, "weak")
+    return guidance
+
+
+def format_image_role_visibility_guidance_for_prompt(event_type: str) -> str:
+    guidance = get_image_role_visibility_guidance(event_type)
+    if not guidance:
+        return "(no image-role visibility guidance)"
+
+    strong_roles = [role for role, strength in guidance.items() if strength == "strong"]
+    weak_roles = [role for role, strength in guidance.items() if strength == "weak"]
+    lines = [
+        f"- visually stronger roles: {json_list(strong_roles) if strong_roles else '[]'}",
+        f"- visually weaker roles: {json_list(weak_roles) if weak_roles else '[]'}",
+        "- For visually weaker roles, require clearer direct visual support and prefer omission when support is indirect, ambiguous, or only text-implied.",
+        "- For visually stronger roles, prediction is still optional and should be omitted when image-side evidence is missing.",
+    ]
+    return "\n".join(lines)
 
 
 def format_event_schema_for_prompt(event_type: str) -> str:

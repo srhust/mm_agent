@@ -10,10 +10,15 @@ from mm_event_agent.nodes.fusion import fusion
 from mm_event_agent.nodes.repair import repair
 from mm_event_agent.nodes.search import search
 from mm_event_agent.nodes.verifier import verifier
-from mm_event_agent.ontology import get_event_schema, get_supported_event_types
+from mm_event_agent.ontology import (
+    format_image_role_visibility_guidance_for_prompt,
+    get_event_schema,
+    get_supported_event_types,
+)
 from mm_event_agent.schemas import (
     ValidationError,
     attach_text_spans,
+    build_grounding_requests,
     choose_best_span,
     empty_event,
     empty_fusion_context,
@@ -34,11 +39,24 @@ class FakeLLM:
         return SimpleNamespace(content=self._responses.pop(0))
 
 
+class RecordingLLM:
+    def __init__(self, response: str) -> None:
+        self.response = response
+        self.prompts: list[str] = []
+
+    def invoke(self, messages):
+        for message in messages:
+            content = getattr(message, "content", "")
+            self.prompts.append(content if isinstance(content, str) else str(content))
+        return SimpleNamespace(content=self.response)
+
+
 def make_state() -> dict:
     return {
         "text": "A bomb exploded in a market",
-        "raw_image": None,
+        "raw_image": "tests://fixtures/market-scene.jpg",
         "event_type_mode": "closed_set",
+        # Current bridge representation derived from raw_image.
         "image_desc": "market area with smoke and people running",
         "perception_summary": "",
         "search_query": "",
@@ -129,6 +147,19 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(schema["role_definitions"]["Attacker"], "The person, group, or force carrying out the attack.")
         self.assertTrue(schema["extraction_notes"])
 
+    def test_visibility_guidance_marks_weak_roles_more_conservatively(self) -> None:
+        guidance = format_image_role_visibility_guidance_for_prompt("Conflict:Attack")
+
+        self.assertIn("visually stronger roles: [Target, Instrument, Place]", guidance)
+        self.assertIn("visually weaker roles: [Attacker]", guidance)
+        self.assertIn("prefer omission", guidance)
+
+    def test_visibility_guidance_keeps_clearly_visible_roles_allowed(self) -> None:
+        guidance = format_image_role_visibility_guidance_for_prompt("Conflict:Demonstrate")
+
+        self.assertIn("visually stronger roles: [Entity, Instrument, Place]", guidance)
+        self.assertIn("visually weaker roles: [Police]", guidance)
+
     def test_invalid_json_output_falls_back_to_empty_event(self) -> None:
         state = make_state()
         state["fusion_context"] = {
@@ -166,6 +197,13 @@ class SmokeTests(unittest.TestCase):
         fused = fusion({**state, "perception_summary": "summary"})
 
         self.assertEqual(fused["fusion_context"]["raw_image_desc"], state["image_desc"])
+
+    def test_initial_state_contract_carries_raw_text_plus_raw_image(self) -> None:
+        state = make_state()
+
+        self.assertEqual(state["text"], "A bomb exploded in a market")
+        self.assertTrue(state["raw_image"])
+        self.assertEqual(state["image_desc"], "market area with smoke and people running")
 
     def test_verifier_flags_invalid_text_span(self) -> None:
         state = make_state()
@@ -427,6 +465,7 @@ class SmokeTests(unittest.TestCase):
             result = repair(state)
 
         self.assertEqual(result["event"]["trigger"]["span"], {"start": 7, "end": 15})
+        self.assertEqual(result["event"]["event_type"], state["event"]["event_type"])
         self.assertEqual(result["event"]["text_arguments"], state["event"]["text_arguments"])
         self.assertEqual(result["event"]["image_arguments"], state["event"]["image_arguments"])
 
@@ -466,6 +505,7 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(result["event"]["text_arguments"][1]["text"], state["event"]["text_arguments"][1]["text"])
         self.assertEqual(result["event"]["text_arguments"][1]["span"], {"start": 21, "end": 29})
         self.assertEqual(result["event"]["trigger"], state["event"]["trigger"])
+        self.assertEqual(result["event"]["event_type"], state["event"]["event_type"])
 
     def test_repair_only_one_image_bbox_diagnosed_preserves_unrelated_fields(self) -> None:
         state = make_state()
@@ -501,6 +541,45 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(result["event"]["image_arguments"][0], state["event"]["image_arguments"][0])
         self.assertEqual(result["event"]["text_arguments"], state["event"]["text_arguments"])
         self.assertEqual(result["event"]["event_type"], state["event"]["event_type"])
+
+    def test_repair_prompt_includes_field_local_repair_plan(self) -> None:
+        state = make_state()
+        state["text"] = "A bomb exploded in a market"
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 4}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "image_arguments": [{"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}],
+        }
+        state["verifier_diagnostics"] = [
+            {"field_path": "trigger.span", "issue_type": "span_mismatch", "suggested_action": "realign_or_drop"},
+            {
+                "field_path": "image_arguments[0].label",
+                "issue_type": "missing_or_empty",
+                "suggested_action": "fill_or_drop",
+            },
+        ]
+
+        repair_llm = RecordingLLM(
+            '{"event_type":"Conflict:Attack","trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[{"role":"Place","text":"market","span":null}],"image_arguments":[{"role":"Place","label":"market area","bbox":null,"grounding_status":"unresolved"}]}'
+        )
+
+        with patch(
+            "mm_event_agent.nodes.repair._get_llm",
+            return_value=repair_llm,
+        ):
+            repair(state)
+
+        self.assertTrue(repair_llm.prompts)
+        prompt = repair_llm.prompts[0]
+        self.assertIn("Repair plan:", prompt)
+        self.assertIn("field_path: trigger.span; issue_type: span_mismatch; suggested_action: realign_or_drop", prompt)
+        self.assertIn(
+            "field_path: image_arguments[0].label; issue_type: missing_or_empty; suggested_action: fill_or_drop",
+            prompt,
+        )
+        self.assertIn("Modify ONLY the diagnosed fields listed in the repair plan.", prompt)
+        self.assertIn("Preserve all other fields unchanged.", prompt)
 
     def test_extraction_rejects_unsupported_closed_set_event_type(self) -> None:
         state = make_state()
@@ -543,6 +622,76 @@ class SmokeTests(unittest.TestCase):
 
         self.assertEqual(result["event"]["event_type"], "Conflict:Attack")
 
+    def test_closed_set_mode_never_accepts_unsupported(self) -> None:
+        state = make_state()
+        state["event_type_mode"] = "closed_set"
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(['{"event_type":"Unsupported"}']),
+        ):
+            result = extraction(state)
+
+        self.assertEqual(result["event"], empty_event())
+
+    def test_stage_c_prompt_adds_conservative_guidance_for_weak_roles(self) -> None:
+        state = make_state()
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+        stage_c_llm = RecordingLLM('{"image_arguments":[]}')
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=stage_c_llm,
+        ):
+            from mm_event_agent.nodes.extraction import _stage_c_extract_image_arguments
+
+            result = _stage_c_extract_image_arguments("Conflict:Attack", state["image_desc"], [])
+
+        self.assertEqual(result, [])
+        self.assertTrue(stage_c_llm.prompts)
+        prompt = stage_c_llm.prompts[0]
+        self.assertIn("Image-role visibility guidance", prompt)
+        self.assertIn("visually weaker roles: [Attacker]", prompt)
+        self.assertIn("prefer omission over unsupported image-role prediction", prompt)
+        self.assertIn("Do not output a weakly visible role just because it is semantically allowed", prompt)
+
+    def test_stage_c_prompt_still_allows_clearly_visible_roles(self) -> None:
+        stage_c_llm = RecordingLLM(
+            '{"image_arguments":[{"role":"Place","label":"market area","bbox":null,"grounding_status":"unresolved"}]}'
+        )
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=stage_c_llm,
+        ):
+            from mm_event_agent.nodes.extraction import _stage_c_extract_image_arguments
+
+            result = _stage_c_extract_image_arguments(
+                "Conflict:Attack",
+                "market area with smoke and visible blast damage",
+                [],
+            )
+
+        self.assertEqual(
+            result,
+            [{"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}],
+        )
+        prompt = stage_c_llm.prompts[0]
+        self.assertIn("visually stronger roles: [Target, Instrument, Place]", prompt)
+        self.assertIn("For visually stronger roles, prediction is still optional", prompt)
+
     def test_transfer_mode_allows_unsupported(self) -> None:
         state = make_state()
         state["event_type_mode"] = "transfer"
@@ -561,6 +710,10 @@ class SmokeTests(unittest.TestCase):
             result = extraction(state)
 
         self.assertEqual(result["event"], empty_event())
+        self.assertEqual(result["event"]["event_type"], "")
+        self.assertIsNone(result["event"]["trigger"])
+        self.assertEqual(result["event"]["text_arguments"], [])
+        self.assertEqual(result["event"]["image_arguments"], [])
 
     def test_unsupported_event_type_short_circuits_downstream_extraction(self) -> None:
         state = make_state()
@@ -581,6 +734,34 @@ class SmokeTests(unittest.TestCase):
             result = extraction(state)
 
         self.assertEqual(result["event"], empty_event())
+        self.assertEqual(result["event"]["event_type"], "")
+        self.assertIsNone(result["event"]["trigger"])
+        self.assertEqual(result["event"]["text_arguments"], [])
+        self.assertEqual(result["event"]["image_arguments"], [])
+
+    def test_extraction_logs_transfer_mode_unsupported_selection(self) -> None:
+        state = make_state()
+        state["event_type_mode"] = "transfer"
+        state["fusion_context"] = {
+            "raw_text": "A football match ended in a draw",
+            "raw_image_desc": "players on a field",
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(['{"event_type":"Unsupported"}']),
+        ), patch("mm_event_agent.nodes.extraction.log_node_event") as mock_log:
+            result = extraction(state)
+
+        self.assertEqual(result["event"], empty_event())
+        self.assertTrue(mock_log.called)
+        _, kwargs = mock_log.call_args
+        self.assertEqual(kwargs["event_type_mode"], "transfer")
+        self.assertTrue(kwargs["stage_a_selected_unsupported"])
+        self.assertEqual(kwargs["stage_a_selected_event_type"], "Unsupported")
 
     def test_validate_event_rejects_invalid_event_type(self) -> None:
         with self.assertRaises(ValidationError):
@@ -643,6 +824,64 @@ class SmokeTests(unittest.TestCase):
                     ],
                 }
             )
+
+    def test_unresolved_image_arguments_produce_grounding_requests(self) -> None:
+        event = {
+            "event_type": "Conflict:Attack",
+            "trigger": None,
+            "text_arguments": [],
+            "image_arguments": [
+                {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"},
+                {"role": "Target", "label": "market stall", "bbox": None, "grounding_status": "unresolved"},
+            ],
+        }
+
+        requests = build_grounding_requests(event)
+
+        self.assertEqual(
+            requests,
+            [
+                {
+                    "role": "Place",
+                    "label": "market area",
+                    "grounding_query": "Place: market area",
+                    "grounding_status": "unresolved",
+                },
+                {
+                    "role": "Target",
+                    "label": "market stall",
+                    "grounding_query": "Target: market stall",
+                    "grounding_status": "unresolved",
+                },
+            ],
+        )
+
+    def test_resolved_image_arguments_are_skipped_for_grounding_requests(self) -> None:
+        event = {
+            "event_type": "Conflict:Attack",
+            "trigger": None,
+            "text_arguments": [],
+            "image_arguments": [
+                {"role": "Place", "label": "market area", "bbox": [0, 1, 2, 3], "grounding_status": "grounded"},
+                {"role": "Target", "label": "market stall", "bbox": [2, 2, 3, 3], "grounding_status": "grounded"},
+            ],
+        }
+
+        requests = build_grounding_requests(event)
+
+        self.assertEqual(requests, [])
+
+    def test_empty_image_arguments_produce_no_grounding_requests(self) -> None:
+        event = {
+            "event_type": "Conflict:Attack",
+            "trigger": None,
+            "text_arguments": [],
+            "image_arguments": [],
+        }
+
+        requests = build_grounding_requests(event)
+
+        self.assertEqual(requests, [])
 
 
 if __name__ == "__main__":
