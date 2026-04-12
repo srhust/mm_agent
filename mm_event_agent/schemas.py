@@ -65,6 +65,7 @@ class VerificationDiagnostic(TypedDict):
 
 class FusionContext(TypedDict):
     raw_text: str
+    # Current image-side intermediate representation, not the original raw image.
     raw_image_desc: str
     perception_summary: str
     patterns: list[dict[str, Any]]
@@ -81,6 +82,11 @@ def empty_event() -> Event:
 
 
 def empty_fusion_context() -> FusionContext:
+    """Create the current fusion context.
+
+    raw_image_desc is the normalized image-side description used today.
+    The original raw image travels separately in the global state.
+    """
     return {
         "raw_text": "",
         "raw_image_desc": "",

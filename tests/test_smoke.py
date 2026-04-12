@@ -38,6 +38,7 @@ def make_state() -> dict:
     return {
         "text": "A bomb exploded in a market",
         "raw_image": None,
+        "event_type_mode": "closed_set",
         "image_desc": "market area with smoke and people running",
         "perception_summary": "",
         "search_query": "",
@@ -515,6 +516,70 @@ class SmokeTests(unittest.TestCase):
             return_value=FakeLLM(['{"event_type":"attack"}']),
         ):
             result = extraction(state)
+        self.assertEqual(result["event"], empty_event())
+
+    def test_closed_set_mode_forces_supported_ontology_label(self) -> None:
+        state = make_state()
+        state["event_type_mode"] = "closed_set"
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack"}',
+                    '{"trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[]}',
+                    '{"image_arguments":[]}',
+                ]
+            ),
+        ):
+            result = extraction(state)
+
+        self.assertEqual(result["event"]["event_type"], "Conflict:Attack")
+
+    def test_transfer_mode_allows_unsupported(self) -> None:
+        state = make_state()
+        state["event_type_mode"] = "transfer"
+        state["fusion_context"] = {
+            "raw_text": "A football match ended in a draw",
+            "raw_image_desc": "players on a field",
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(['{"event_type":"Unsupported"}']),
+        ):
+            result = extraction(state)
+
+        self.assertEqual(result["event"], empty_event())
+
+    def test_unsupported_event_type_short_circuits_downstream_extraction(self) -> None:
+        state = make_state()
+        state["event_type_mode"] = "transfer"
+        state["fusion_context"] = {
+            "raw_text": "A football match ended in a draw",
+            "raw_image_desc": "players on a field",
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+
+        fake_llm = FakeLLM(['{"event_type":"Unsupported"}'])
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=fake_llm,
+        ):
+            result = extraction(state)
+
         self.assertEqual(result["event"], empty_event())
 
     def test_validate_event_rejects_invalid_event_type(self) -> None:

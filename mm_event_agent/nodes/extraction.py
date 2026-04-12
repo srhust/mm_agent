@@ -51,6 +51,11 @@ def _extract_stage_json(prompt: str) -> dict[str, Any]:
 
 
 def _build_image_side_info(raw_image_desc: str, perception_summary: str) -> str:
+    """Build the current image-side prompt context from intermediate signals.
+
+    The raw image itself is not consumed here yet; extraction still operates on
+    the derived image description / summary pathway until future grounding work.
+    """
     summary = str(perception_summary or "").strip()
     image_desc = str(raw_image_desc or "").strip()
     if summary:
@@ -62,25 +67,45 @@ def _stage_a_select_event_type(
     raw_text: str,
     image_side_info: str,
     evidence_items: list[Any],
+    event_type_mode: str,
 ) -> str:
     allowed_event_types = get_supported_event_types()
     ontology_block = format_full_ontology_for_prompt()
+    normalized_mode = str(event_type_mode or "closed_set").strip() or "closed_set"
+    if normalized_mode not in {"closed_set", "transfer"}:
+        normalized_mode = "closed_set"
+
+    if normalized_mode == "transfer":
+        selection_rule = (
+            "Stage A mode: transfer.\n"
+            "Choose exactly one supported ontology event_type, or return \"Unsupported\" if the input does not clearly fit the current ontology.\n"
+            'Return ONLY JSON: {"event_type": "<one supported label or Unsupported>"}\n\n'
+        )
+    else:
+        selection_rule = (
+            "Stage A mode: closed_set.\n"
+            "Choose exactly one supported ontology event_type from the closed set.\n"
+            'Return ONLY JSON: {"event_type": "<one of the allowed labels>"}\n\n'
+        )
     prompt = (
-        "Stage A: closed-set event type selection.\n"
-        "Classify exactly one event_type from this closed set only:\n"
+        "Stage A: event type selection.\n"
+        "Classify the input using the configured event type selection mode.\n"
+        f"{selection_rule}"
+        "Supported ontology event types:\n"
         f"{json.dumps(allowed_event_types, ensure_ascii=False)}\n\n"
         "Ontology semantics:\n"
         f"{ontology_block}\n\n"
         "Use raw_text, image-side information, and evidence. Prefer evidence when available.\n"
         "- Use event definitions and trigger hints to choose the best matching event type.\n"
         "- Do not invent new labels or open-set variants.\n"
-        'Return ONLY JSON: {"event_type": "<one of the allowed labels>"}\n\n'
         f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
         f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
         f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
     )
     parsed = _extract_stage_json(prompt)
     event_type = str(parsed.get("event_type") or "").strip()
+    if normalized_mode == "transfer" and event_type == "Unsupported":
+        return event_type
     if event_type not in allowed_event_types:
         raise ValueError("unsupported event_type")
     return event_type
@@ -159,9 +184,12 @@ def _run_staged_extraction(
     raw_image_desc: str,
     perception_summary: str,
     evidence_items: list[Any],
+    event_type_mode: str,
 ) -> dict[str, Any]:
     image_side_info = _build_image_side_info(raw_image_desc, perception_summary)
-    event_type = _stage_a_select_event_type(raw_text, image_side_info, evidence_items)
+    event_type = _stage_a_select_event_type(raw_text, image_side_info, evidence_items, event_type_mode)
+    if event_type == "Unsupported":
+        return empty_event()
     text_fields = _stage_b_extract_text_fields(event_type, raw_text, image_side_info, evidence_items)
     image_arguments = _stage_c_extract_image_arguments(
         event_type,
@@ -196,6 +224,7 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
     raw_text = str(fusion_context.get("raw_text") or "")
     raw_image_desc = str(fusion_context.get("raw_image_desc") or "")
     perception_summary = str(fusion_context.get("perception_summary") or "")
+    event_type_mode = str(state.get("event_type_mode") or "closed_set")
     patterns = fusion_context.get("patterns")
     evidence_items = fusion_context.get("evidence")
 
@@ -209,11 +238,15 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             raw_image_desc,
             perception_summary,
             evidence_items,
+            event_type_mode,
         )
-        event = enforce_strict_text_grounding(
-            parse_event_json(json.dumps(assembled_event, ensure_ascii=False)),
-            raw_text,
-        )
+        if not assembled_event["event_type"]:
+            event = empty_event()
+        else:
+            event = enforce_strict_text_grounding(
+                parse_event_json(json.dumps(assembled_event, ensure_ascii=False)),
+                raw_text,
+            )
         result = {"event": event}
         log_node_event(
             "extraction",
@@ -221,6 +254,7 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             started_at,
             True,
             event_type=event["event_type"],
+            event_type_mode=event_type_mode,
             staged=True,
             evidence_used=len(evidence_items),
         )
@@ -234,6 +268,7 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             started_at,
             False,
             error=str(exc),
+            event_type_mode=event_type_mode,
             staged=True,
             evidence_used=len(evidence_items),
         )

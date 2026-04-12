@@ -1,4 +1,9 @@
-"""Run the LangGraph multimodal event extraction pipeline."""
+"""Run the LangGraph multimodal event extraction pipeline.
+
+Current input contract: raw text + raw image.
+Current operational image representation: image_desc as an intermediate fallback
+until raw-image grounding is implemented.
+"""
 
 from __future__ import annotations
 
@@ -28,9 +33,10 @@ def main() -> None:
 
     g = graph.build_graph()
     state = {
-        # Data fields
+        # Data fields: original inputs plus current intermediate representations.
         "text": "A bomb exploded in a market",
         "raw_image": None,
+        "event_type_mode": "closed_set",
         "image_desc": "people running, smoke",
         "perception_summary": "",
         "search_query": "",
