@@ -18,6 +18,7 @@ from mm_event_agent.ontology import (
     is_supported_event_type,
 )
 from mm_event_agent.observability import log_node_event
+from mm_event_agent.evidence.debug import summarize_evidence_sources
 from mm_event_agent.grounding.debug import summarize_grounding_activity
 from mm_event_agent.schemas import (
     VerificationDiagnostic,
@@ -494,6 +495,11 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
             }
         )
     raw_text = str(fusion_context.get("raw_text") or "")
+    raw_image_desc = str(fusion_context.get("raw_image_desc") or "")
+    perception_summary = str(fusion_context.get("perception_summary") or "")
+    evidence_items = fusion_context.get("evidence")
+    if not isinstance(evidence_items, list):
+        evidence_items = []
     raw_event = state.get("event")
     grounding_results = state.get("grounding_results")
     grounding_summary = summarize_grounding_activity(
@@ -517,6 +523,14 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
             }
         )
         event = empty_event()
+    support_summary = summarize_evidence_sources(
+        raw_event=event,
+        raw_text=raw_text,
+        raw_image_desc=raw_image_desc,
+        perception_summary=perception_summary,
+        grounding_results=grounding_results,
+        evidence=evidence_items,
+    )
 
     ontology_block = format_full_ontology_for_prompt()
     if is_supported_event_type(raw_event_type):
@@ -606,6 +620,10 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_unresolved_image_arguments=grounding_summary["unresolved_image_arguments"],
             grounding_results=grounding_summary["grounded_results"],
             grounding_failed_results=grounding_summary["failed_grounding_results"],
+            text_support=support_summary["text_support"],
+            image_support=support_summary["image_support"],
+            grounding_support=support_summary["grounding_support"],
+            external_evidence_support=support_summary["external_evidence_support"],
         )
         return result
     except Exception as exc:
@@ -634,6 +652,10 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_unresolved_image_arguments=grounding_summary["unresolved_image_arguments"],
             grounding_results=grounding_summary["grounded_results"],
             grounding_failed_results=grounding_summary["failed_grounding_results"],
+            text_support=support_summary["text_support"],
+            image_support=support_summary["image_support"],
+            grounding_support=support_summary["grounding_support"],
+            external_evidence_support=support_summary["external_evidence_support"],
         )
         return result
 

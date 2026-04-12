@@ -65,6 +65,22 @@ class GroundingSummary(TypedDict):
     applied_grounded_bboxes: int
 
 
+class EvidenceSourceSummary(TypedDict):
+    text_support: bool
+    image_support: bool
+    grounding_support: bool
+    external_evidence_support: bool
+
+
+class EvidenceSourceSnapshot(TypedDict):
+    event_type: str
+    text_support: bool
+    image_support: bool
+    grounding_support: bool
+    external_evidence_support: bool
+    final_event: Event
+
+
 class Event(TypedDict):
     event_type: str
     trigger: Trigger | None

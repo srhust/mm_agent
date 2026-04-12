@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from mm_event_agent.graph import build_graph
+from mm_event_agent.evidence.debug import build_evidence_source_snapshot, summarize_evidence_sources
 from mm_event_agent.grounding.florence2_hf import (
     Florence2HFGrounder,
     apply_grounding_results_to_event,
@@ -21,6 +22,7 @@ from mm_event_agent.ontology import (
     get_event_schema,
     get_supported_event_types,
 )
+from mm_event_agent.search.tavily_client import TavilySearchClient
 from mm_event_agent.schemas import (
     ValidationError,
     attach_text_spans,
@@ -93,13 +95,15 @@ class SmokeTests(unittest.TestCase):
                 '{"event_type":"Conflict:Attack","trigger":null,"text_arguments":[],"image_arguments":[]}'
             ],
         ), patch(
-            "mm_event_agent.nodes.search._search_web",
+            "mm_event_agent.nodes.search.search_news",
             return_value=[
                 {
                     "title": "Market attack update",
-                    "body": "Police said a bomb exploded at the city market.",
-                    "href": "https://example.com/news/market-attack",
-                    "date": "2026-04-12",
+                    "snippet": "Police said a bomb exploded at the city market.",
+                    "url": "https://example.com/news/market-attack",
+                    "source_type": "search",
+                    "published_at": "2026-04-12",
+                    "score": 0.82,
                 }
             ],
         ), patch(
@@ -188,7 +192,7 @@ class SmokeTests(unittest.TestCase):
     def test_empty_evidence_fallback(self) -> None:
         state = make_state()
 
-        with patch("mm_event_agent.nodes.search._search_web", side_effect=RuntimeError("search down")):
+        with patch("mm_event_agent.nodes.search.search_news", side_effect=RuntimeError("search down")):
             search_result = search(state)
 
         self.assertEqual(search_result["evidence"], [])
@@ -196,6 +200,346 @@ class SmokeTests(unittest.TestCase):
 
         fused = fusion({**state, **search_result, "perception_summary": "summary"})
         self.assertEqual(fused["fusion_context"]["evidence"], [])
+
+    def test_tavily_adapter_without_api_key_returns_empty_evidence(self) -> None:
+        client = TavilySearchClient(api_key="")
+
+        self.assertEqual(client.search("market bombing"), [])
+
+    def test_tavily_adapter_normalizes_successful_output_shape(self) -> None:
+        client = TavilySearchClient(api_key="test-key", endpoint="https://example.test/search")
+
+        with patch.object(
+            client,
+            "_post",
+            return_value={
+                "results": [
+                    {
+                        "title": "Market blast latest",
+                        "content": "Officials said the blast happened near the market entrance.",
+                        "url": "https://example.com/blast",
+                        "published_date": "2026-04-12",
+                        "score": 0.87,
+                    }
+                ]
+            },
+        ):
+            results = client.search("market blast")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            results[0],
+            {
+                "title": "Market blast latest",
+                "snippet": "Officials said the blast happened near the market entrance.",
+                "url": "https://example.com/blast",
+                "source_type": "search",
+                "published_at": "2026-04-12",
+                "score": 0.87,
+            },
+        )
+
+    def test_search_node_returns_schema_valid_evidence_items(self) -> None:
+        state = make_state()
+
+        with patch(
+            "mm_event_agent.nodes.search.search_news",
+            return_value=[
+                {
+                    "title": "Market attack update",
+                    "snippet": "Police confirmed an explosion at the market.",
+                    "url": "https://example.com/news/market-attack",
+                    "source_type": "search",
+                    "published_at": "2026-04-12",
+                    "score": 0.91,
+                }
+            ],
+        ):
+            result = search(state)
+
+        self.assertEqual(result["search_query"], "A bomb exploded in a market")
+        self.assertEqual(len(result["evidence"]), 1)
+        self.assertEqual(result["evidence"][0]["source_type"], "search")
+        self.assertIsInstance(result["evidence"][0]["score"], float)
+        self.assertEqual(result["evidence"][0]["published_at"], "2026-04-12")
+
+    def test_tavily_adapter_failure_does_not_crash_pipeline(self) -> None:
+        client = TavilySearchClient(api_key="test-key", endpoint="https://example.test/search")
+
+        with patch.object(client, "_post", side_effect=RuntimeError("boom")):
+            self.assertEqual(client.search("market blast"), [])
+
+        with patch("mm_event_agent.nodes.search.search_news", side_effect=RuntimeError("boom")):
+            result = search(make_state())
+
+        self.assertEqual(result["evidence"], [])
+
+    def test_search_node_top_k_filtering_keeps_best_ranked_evidence(self) -> None:
+        state = make_state()
+
+        with patch("mm_event_agent.nodes.search.os.getenv", side_effect=lambda name, default=None: "2" if name == "MM_EVENT_SEARCH_TOP_K" else default), patch(
+            "mm_event_agent.nodes.search.search_news",
+            return_value=[
+                {
+                    "title": "Market blast kills shoppers",
+                    "snippet": "A bomb exploded in a crowded market and witnesses saw smoke.",
+                    "url": "https://example.com/1",
+                    "source_type": "search",
+                    "published_at": "2026-04-12",
+                    "score": 0.92,
+                },
+                {
+                    "title": "Officials probe market explosion",
+                    "snippet": "Investigators said the market explosion injured civilians.",
+                    "url": "https://example.com/2",
+                    "source_type": "search",
+                    "published_at": "2026-04-11",
+                    "score": 0.83,
+                },
+                {
+                    "title": "Stocks fall after global trade jitters",
+                    "snippet": "Markets fell as investors reacted to tariff risks.",
+                    "url": "https://example.com/3",
+                    "source_type": "search",
+                    "published_at": "2026-04-12",
+                    "score": 0.95,
+                },
+            ],
+        ):
+            result = search(state)
+
+        self.assertEqual(len(result["evidence"]), 2)
+        self.assertEqual([item["url"] for item in result["evidence"]], ["https://example.com/1", "https://example.com/2"])
+
+    def test_search_node_drops_obviously_irrelevant_results_when_possible(self) -> None:
+        state = make_state()
+
+        with patch(
+            "mm_event_agent.nodes.search.search_news",
+            return_value=[
+                {
+                    "title": "Celebrity wedding stuns fans",
+                    "snippet": "A singer married an actor in a beach ceremony.",
+                    "url": "https://example.com/wedding",
+                    "source_type": "search",
+                    "published_at": "2026-04-12",
+                    "score": 0.78,
+                },
+                {
+                    "title": "Market bombing investigated",
+                    "snippet": "Police said a bomb exploded in a market and launched an investigation.",
+                    "url": "https://example.com/attack",
+                    "source_type": "search",
+                    "published_at": "2026-04-12",
+                    "score": 0.62,
+                },
+            ],
+        ):
+            result = search(state)
+
+        self.assertEqual(len(result["evidence"]), 1)
+        self.assertEqual(result["evidence"][0]["url"], "https://example.com/attack")
+
+    def test_search_node_empty_results_remain_safe_after_filtering(self) -> None:
+        state = make_state()
+
+        with patch("mm_event_agent.nodes.search.search_news", return_value=[]):
+            result = search(state)
+
+        self.assertEqual(result["search_query"], "A bomb exploded in a market")
+        self.assertEqual(result["evidence"], [])
+
+    def test_filtered_evidence_remains_schema_valid(self) -> None:
+        state = make_state()
+
+        with patch(
+            "mm_event_agent.nodes.search.search_news",
+            return_value=[
+                {
+                    "title": "Market bombing latest",
+                    "snippet": "Authorities confirmed the bomb exploded inside the market.",
+                    "url": "https://example.com/latest",
+                    "source_type": "search",
+                    "published_at": "2026-04-12",
+                    "score": 0.88,
+                },
+                {
+                    "title": "Low quality item",
+                    "snippet": "noise",
+                    "url": "https://example.com/noise",
+                    "source_type": "search",
+                    "published_at": "2020-01-01",
+                    "score": 0.01,
+                },
+            ],
+        ):
+            result = search(state)
+
+        self.assertTrue(result["evidence"])
+        for item in result["evidence"]:
+            self.assertEqual(set(item.keys()), {"title", "snippet", "url", "source_type", "published_at", "score"})
+            self.assertEqual(item["source_type"], "search")
+            self.assertIsInstance(item["score"], float)
+
+    def test_evidence_source_summary_text_only_case(self) -> None:
+        summary = summarize_evidence_sources(
+            raw_event={
+                "event_type": "Conflict:Attack",
+                "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
+                "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+                "image_arguments": [],
+            },
+            raw_text="A bomb exploded in a market",
+            raw_image_desc="",
+            grounding_results=[],
+            evidence=[],
+        )
+
+        self.assertEqual(
+            summary,
+            {
+                "text_support": True,
+                "image_support": False,
+                "grounding_support": False,
+                "external_evidence_support": False,
+            },
+        )
+
+    def test_evidence_source_summary_text_and_grounding_case(self) -> None:
+        summary = summarize_evidence_sources(
+            raw_event={
+                "event_type": "Conflict:Attack",
+                "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
+                "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+                "image_arguments": [
+                    {"role": "Place", "label": "market area", "bbox": [1.0, 2.0, 11.0, 12.0], "grounding_status": "grounded"}
+                ],
+            },
+            raw_text="A bomb exploded in a market",
+            raw_image_desc="market area with smoke",
+            grounding_results=[
+                {
+                    "role": "Place",
+                    "label": "market area",
+                    "grounding_query": "Place: market area",
+                    "bbox": [1.0, 2.0, 11.0, 12.0],
+                    "score": 0.88,
+                    "grounding_status": "grounded",
+                }
+            ],
+            evidence=[],
+        )
+
+        self.assertTrue(summary["text_support"])
+        self.assertTrue(summary["image_support"])
+        self.assertTrue(summary["grounding_support"])
+        self.assertFalse(summary["external_evidence_support"])
+
+    def test_evidence_source_summary_text_and_external_evidence_case(self) -> None:
+        snapshot = build_evidence_source_snapshot(
+            raw_event={
+                "event_type": "Conflict:Attack",
+                "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
+                "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+                "image_arguments": [],
+            },
+            raw_text="A bomb exploded in a market",
+            evidence=[
+                {
+                    "title": "Market explosion latest",
+                    "snippet": "Police said a bomb exploded in a market district.",
+                    "url": "https://example.com/evidence",
+                    "source_type": "search",
+                    "published_at": "2026-04-12",
+                    "score": 0.9,
+                }
+            ],
+        )
+
+        self.assertEqual(snapshot["event_type"], "Conflict:Attack")
+        self.assertTrue(snapshot["text_support"])
+        self.assertFalse(snapshot["image_support"])
+        self.assertFalse(snapshot["grounding_support"])
+        self.assertTrue(snapshot["external_evidence_support"])
+        self.assertEqual(snapshot["final_event"]["event_type"], "Conflict:Attack")
+
+    def test_evidence_source_summary_no_support_empty_event_case(self) -> None:
+        summary = summarize_evidence_sources(
+            raw_event=empty_event(),
+            raw_text="A bomb exploded in a market",
+            raw_image_desc="market area with smoke",
+            grounding_results=[
+                {
+                    "role": "Place",
+                    "label": "market area",
+                    "grounding_query": "Place: market area",
+                    "bbox": [1.0, 2.0, 11.0, 12.0],
+                    "score": 0.88,
+                    "grounding_status": "grounded",
+                }
+            ],
+            evidence=[
+                {
+                    "title": "Market explosion latest",
+                    "snippet": "Police said a bomb exploded in a market district.",
+                    "url": "https://example.com/evidence",
+                    "source_type": "search",
+                    "published_at": "2026-04-12",
+                    "score": 0.9,
+                }
+            ],
+        )
+
+        self.assertEqual(
+            summary,
+            {
+                "text_support": False,
+                "image_support": False,
+                "grounding_support": False,
+                "external_evidence_support": False,
+            },
+        )
+
+    def test_verifier_logs_evidence_source_summary_fields(self) -> None:
+        state = make_state()
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": "market area with smoke",
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [
+                {
+                    "title": "Market explosion latest",
+                    "snippet": "Police said a bomb exploded in a market district.",
+                    "url": "https://example.com/evidence",
+                    "source_type": "search",
+                    "published_at": "2026-04-12",
+                    "score": 0.9,
+                }
+            ],
+        }
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "image_arguments": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(
+                ['{"verdict":"YES","issues":[],"confidence":0.95,"reason":"supported"}']
+            ),
+        ), patch("mm_event_agent.nodes.verifier.log_node_event") as mock_log:
+            verifier(state)
+
+        _, kwargs = mock_log.call_args
+        self.assertIn("text_support", kwargs)
+        self.assertIn("image_support", kwargs)
+        self.assertIn("grounding_support", kwargs)
+        self.assertIn("external_evidence_support", kwargs)
+        self.assertTrue(kwargs["text_support"])
+        self.assertTrue(kwargs["external_evidence_support"])
 
     def test_raw_image_field_does_not_break_image_desc_fallback(self) -> None:
         state = make_state()

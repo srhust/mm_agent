@@ -19,6 +19,7 @@ from mm_event_agent.ontology import (
     is_supported_event_type,
 )
 from mm_event_agent.observability import log_node_event
+from mm_event_agent.evidence.debug import summarize_evidence_sources
 from mm_event_agent.grounding.florence2_hf import apply_grounding_results_to_event
 from mm_event_agent.grounding.debug import compare_grounding_stages, summarize_grounding_activity
 from mm_event_agent.schemas import (
@@ -361,6 +362,9 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         current_event = empty_event()
 
     evidence = _format_evidence_items(state.get("evidence"))
+    raw_evidence_items = state.get("evidence")
+    if not isinstance(raw_evidence_items, list):
+        raw_evidence_items = []
     grounding_results = state.get("grounding_results")
     grounding_results_block = _format_grounding_results(grounding_results)
     similar_block = _format_similar_events(state.get("similar_events"))
@@ -372,6 +376,8 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
     target_field_paths = _collect_target_field_paths(repair_plan)
     target_field_summary = _summarize_target_field_paths(target_field_paths)
     raw_text = str(state.get("text") or "")
+    raw_image_desc = str(state.get("image_desc") or "")
+    perception_summary = str(state.get("perception_summary") or "")
     supported_event_types = get_supported_event_types()
     current_event_type = str(current_event.get("event_type") or "").strip()
     if is_supported_event_type(current_event_type):
@@ -466,6 +472,14 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             repaired_event.get("image_arguments"),
         )
         grounding_summary = grounding_debug["summary"]
+        support_summary = summarize_evidence_sources(
+            raw_event=repaired_event,
+            raw_text=raw_text,
+            raw_image_desc=raw_image_desc,
+            perception_summary=perception_summary,
+            grounding_results=grounding_results,
+            evidence=raw_evidence_items,
+        )
         result = {
             "event": repaired_event,
             "repair_attempts": attempts,
@@ -482,6 +496,10 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_results=grounding_summary["grounded_results"],
             grounding_failed_results=grounding_summary["failed_grounding_results"],
             grounding_applied_bboxes=grounding_summary["applied_grounded_bboxes"],
+            text_support=support_summary["text_support"],
+            image_support=support_summary["image_support"],
+            grounding_support=support_summary["grounding_support"],
+            external_evidence_support=support_summary["external_evidence_support"],
         )
         return result
     except Exception as exc:
@@ -491,6 +509,14 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_requests=None,
             grounding_results=grounding_results,
             image_arguments_after=fallback_event.get("image_arguments"),
+        )
+        support_summary = summarize_evidence_sources(
+            raw_event=fallback_event,
+            raw_text=raw_text,
+            raw_image_desc=raw_image_desc,
+            perception_summary=perception_summary,
+            grounding_results=grounding_results,
+            evidence=raw_evidence_items,
         )
         result = {
             "event": fallback_event,
@@ -508,6 +534,10 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_results=grounding_summary["grounded_results"],
             grounding_failed_results=grounding_summary["failed_grounding_results"],
             grounding_applied_bboxes=grounding_summary["applied_grounded_bboxes"],
+            text_support=support_summary["text_support"],
+            image_support=support_summary["image_support"],
+            grounding_support=support_summary["grounding_support"],
+            external_evidence_support=support_summary["external_evidence_support"],
         )
         return result
 

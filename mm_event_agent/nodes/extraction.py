@@ -19,6 +19,7 @@ from mm_event_agent.ontology import (
     get_supported_event_types,
 )
 from mm_event_agent.observability import log_node_event
+from mm_event_agent.evidence.debug import summarize_evidence_sources
 from mm_event_agent.grounding.debug import summarize_grounding_activity
 from mm_event_agent.schemas import (
     build_grounding_requests,
@@ -315,6 +316,14 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_results=grounding_results,
             image_arguments_after=event.get("image_arguments"),
         )
+        support_summary = summarize_evidence_sources(
+            raw_event=event,
+            raw_text=raw_text,
+            raw_image_desc=raw_image_desc,
+            perception_summary=perception_summary,
+            grounding_results=grounding_results,
+            evidence=evidence_items,
+        )
         result = {"event": event, "grounding_results": grounding_results}
         log_node_event(
             "extraction",
@@ -333,10 +342,22 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_applied_bboxes=grounding_summary["applied_grounded_bboxes"],
             staged=True,
             evidence_used=len(evidence_items),
+            text_support=support_summary["text_support"],
+            image_support=support_summary["image_support"],
+            grounding_support=support_summary["grounding_support"],
+            external_evidence_support=support_summary["external_evidence_support"],
         )
         return result
     except Exception as exc:
         fallback = empty_event()
+        support_summary = summarize_evidence_sources(
+            raw_event=fallback,
+            raw_text=raw_text,
+            raw_image_desc=raw_image_desc,
+            perception_summary=perception_summary,
+            grounding_results=grounding_results,
+            evidence=evidence_items,
+        )
         result = {"event": fallback, "grounding_results": grounding_results}
         log_node_event(
             "extraction",
@@ -355,6 +376,10 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_applied_bboxes=grounding_summary["applied_grounded_bboxes"],
             staged=True,
             evidence_used=len(evidence_items),
+            text_support=support_summary["text_support"],
+            image_support=support_summary["image_support"],
+            grounding_support=support_summary["grounding_support"],
+            external_evidence_support=support_summary["external_evidence_support"],
         )
         return result
 
