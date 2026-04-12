@@ -5,6 +5,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from mm_event_agent.graph import build_graph
+from mm_event_agent.grounding.florence2_hf import (
+    Florence2HFGrounder,
+    apply_grounding_results_to_event,
+    execute_grounding_requests,
+)
 from mm_event_agent.nodes.extraction import extraction
 from mm_event_agent.nodes.fusion import fusion
 from mm_event_agent.nodes.repair import repair
@@ -882,6 +887,150 @@ class SmokeTests(unittest.TestCase):
         requests = build_grounding_requests(event)
 
         self.assertEqual(requests, [])
+
+    def test_grounding_executor_returns_empty_for_empty_request_list(self) -> None:
+        results = execute_grounding_requests("tests://fixtures/market-scene.jpg", [])
+
+        self.assertEqual(results, [])
+
+    def test_grounding_executor_missing_raw_image_returns_failed_results(self) -> None:
+        requests = [
+            {
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "grounding_status": "unresolved",
+            }
+        ]
+
+        results = execute_grounding_requests(None, requests)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["role"], "Place")
+        self.assertEqual(results[0]["label"], "market area")
+        self.assertEqual(results[0]["grounding_query"], "Place: market area")
+        self.assertIsNone(results[0]["bbox"])
+        self.assertIsNone(results[0]["score"])
+        self.assertEqual(results[0]["grounding_status"], "failed")
+
+    def test_grounding_executor_unresolved_request_can_return_grounded_schema(self) -> None:
+        requests = [
+            {
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "grounding_status": "unresolved",
+            }
+        ]
+        grounder = Florence2HFGrounder()
+
+        with patch.object(Florence2HFGrounder, "_load_image", return_value=object()), patch.object(
+            Florence2HFGrounder, "_ensure_model_loaded", return_value=None
+        ), patch.object(
+            Florence2HFGrounder,
+            "_run_single_request",
+            return_value={
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "bbox": [1.0, 2.0, 10.0, 12.0],
+                "score": 0.91,
+                "grounding_status": "grounded",
+            },
+        ):
+            results = grounder.execute("fake-path.jpg", requests)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["grounding_status"], "grounded")
+        self.assertEqual(results[0]["bbox"], [1.0, 2.0, 10.0, 12.0])
+        self.assertEqual(results[0]["score"], 0.91)
+
+    def test_grounding_executor_inference_failure_returns_failed_schema(self) -> None:
+        requests = [
+            {
+                "role": "Target",
+                "label": "market stall",
+                "grounding_query": "Target: market stall",
+                "grounding_status": "unresolved",
+            }
+        ]
+        grounder = Florence2HFGrounder()
+
+        with patch.object(Florence2HFGrounder, "_load_image", return_value=object()), patch.object(
+            Florence2HFGrounder, "_ensure_model_loaded", return_value=None
+        ), patch.object(
+            Florence2HFGrounder,
+            "_run_single_request",
+            side_effect=RuntimeError("inference failed"),
+        ):
+            results = grounder.execute("fake-path.jpg", requests)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["role"], "Target")
+        self.assertEqual(results[0]["label"], "market stall")
+        self.assertEqual(results[0]["grounding_query"], "Target: market stall")
+        self.assertIsNone(results[0]["bbox"])
+        self.assertIsNone(results[0]["score"])
+        self.assertEqual(results[0]["grounding_status"], "failed")
+
+    def test_grounding_executor_output_structure_validity(self) -> None:
+        requests = [
+            {
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "grounding_status": "unresolved",
+            }
+        ]
+        grounder = Florence2HFGrounder()
+
+        with patch.object(Florence2HFGrounder, "_load_image", return_value=object()), patch.object(
+            Florence2HFGrounder, "_ensure_model_loaded", return_value=None
+        ), patch.object(
+            Florence2HFGrounder,
+            "_run_single_request",
+            return_value={
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "bbox": [0.0, 1.0, 2.0, 3.0],
+                "score": 0.75,
+                "grounding_status": "grounded",
+            },
+        ):
+            results = grounder.execute("fake-path.jpg", requests)
+
+        self.assertEqual(set(results[0].keys()), {"role", "label", "grounding_query", "bbox", "score", "grounding_status"})
+        self.assertIsInstance(results[0]["bbox"], list)
+        self.assertEqual(len(results[0]["bbox"]), 4)
+        self.assertIsInstance(results[0]["score"], float)
+
+    def test_apply_grounding_results_to_event_is_future_facing_write_back_helper(self) -> None:
+        event = {
+            "event_type": "Conflict:Attack",
+            "trigger": None,
+            "text_arguments": [],
+            "image_arguments": [
+                {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"},
+                {"role": "Target", "label": "market stall", "bbox": None, "grounding_status": "unresolved"},
+            ],
+        }
+        grounding_results = [
+            {
+                "role": "Place",
+                "label": "market area",
+                "grounding_query": "Place: market area",
+                "bbox": [5.0, 6.0, 20.0, 22.0],
+                "score": 0.8,
+                "grounding_status": "grounded",
+            }
+        ]
+
+        updated = apply_grounding_results_to_event(event, grounding_results)
+
+        self.assertEqual(updated["image_arguments"][0]["bbox"], [5.0, 6.0, 20.0, 22.0])
+        self.assertEqual(updated["image_arguments"][0]["grounding_status"], "grounded")
+        self.assertEqual(updated["image_arguments"][1], event["image_arguments"][1])
 
 
 if __name__ == "__main__":

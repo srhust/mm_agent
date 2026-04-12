@@ -48,6 +48,15 @@ class GroundingRequest(TypedDict):
     grounding_status: str
 
 
+class GroundingResult(TypedDict):
+    role: str
+    label: str
+    grounding_query: str
+    bbox: list[float] | None
+    score: float | None
+    grounding_status: str
+
+
 class Event(TypedDict):
     event_type: str
     trigger: Trigger | None
