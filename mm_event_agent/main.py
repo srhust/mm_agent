@@ -30,6 +30,7 @@ def main() -> None:
     state = {
         # Data fields
         "text": "A bomb exploded in a market",
+        "raw_image": None,
         "image_desc": "people running, smoke",
         "perception_summary": "",
         "search_query": "",

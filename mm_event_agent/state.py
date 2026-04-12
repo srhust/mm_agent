@@ -15,6 +15,7 @@ class AgentState(TypedDict):
 
     # Data fields: business input, intermediate context, and final output.
     text: str
+    raw_image: Any
     image_desc: str
     perception_summary: str
     search_query: str

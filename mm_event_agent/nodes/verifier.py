@@ -29,6 +29,15 @@ from mm_event_agent.schemas import (
 _llm: ChatOpenAI | None = None
 
 
+ROLE_CONFUSION_GUIDANCE = [
+    "Attacker vs Target: the initiator of violence is not the entity harmed or attacked.",
+    "Agent vs Person: in arrest events, Agent is the authority and Person is the detainee.",
+    "Destination vs Origin vs Place: Destination is where movement ends, Origin is where movement starts, and Place is a general event location role only when defined for that event type.",
+    "Entity vs Participant: Entity is used for demonstrators or communicators depending on the event schema, while Participant is used for people or groups in a meeting.",
+    "Victim vs Target: Victim is the person who dies in Life:Die, while Target is the person, object, or place under attack in Conflict:Attack.",
+]
+
+
 def _get_llm() -> ChatOpenAI:
     global _llm
     if _llm is None:
@@ -429,6 +438,7 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         selected_schema_block = format_event_schema_for_prompt(raw_event_type)
     else:
         selected_schema_block = "(event_type is missing or unsupported)"
+    confusion_block = "\n".join(f"- {line}" for line in ROLE_CONFUSION_GUIDANCE)
 
     prompt = (
         "You verify an extracted event JSON against the SAME structured fusion_context used at extraction time.\n\n"
@@ -436,9 +446,15 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         f"{ontology_block}\n\n"
         "Predicted event_type schema focus:\n"
         f"{selected_schema_block}\n\n"
+        "Role confusion checks:\n"
+        f"{confusion_block}\n\n"
         "Checks:\n"
         "1) Ontology: Is event.event_type in the supported ontology, does it semantically match the event definition and trigger hints, and are text/image roles valid for that event_type?\n"
         "Use the role definitions and extraction notes to decide whether arguments fit the intended meaning of each role.\n"
+        "Decide whether the trigger meaning fits the predicted event type, not just whether the trigger token appears in text.\n"
+        "Check whether text argument roles are semantically appropriate for their mentions.\n"
+        "Check whether image argument roles are semantically appropriate for their labels.\n"
+        "Pay special attention to the listed closely related role confusions and flag them when the event uses the wrong role despite using an allowed role name.\n"
         "2) Text support: Are event.trigger.text and event.text_arguments supported by fusion_context.raw_text? "
         "Check quoted text and spans.\n"
         "3) Image support: Are event.image_arguments supported by fusion_context.raw_image_desc? "

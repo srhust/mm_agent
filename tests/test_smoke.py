@@ -37,6 +37,7 @@ class FakeLLM:
 def make_state() -> dict:
     return {
         "text": "A bomb exploded in a market",
+        "raw_image": None,
         "image_desc": "market area with smoke and people running",
         "perception_summary": "",
         "search_query": "",
@@ -157,6 +158,14 @@ class SmokeTests(unittest.TestCase):
         fused = fusion({**state, **search_result, "perception_summary": "summary"})
         self.assertEqual(fused["fusion_context"]["evidence"], [])
 
+    def test_raw_image_field_does_not_break_image_desc_fallback(self) -> None:
+        state = make_state()
+        state["raw_image"] = b"fake-image-bytes"
+
+        fused = fusion({**state, "perception_summary": "summary"})
+
+        self.assertEqual(fused["fusion_context"]["raw_image_desc"], state["image_desc"])
+
     def test_verifier_flags_invalid_text_span(self) -> None:
         state = make_state()
         state["fusion_context"] = {
@@ -223,6 +232,73 @@ class SmokeTests(unittest.TestCase):
         self.assertFalse(result["verified"])
         self.assertIn("invalid text role at index 0", result["issues"])
         self.assertTrue(any(x["field_path"] == "text_arguments[0].role" for x in result["verifier_diagnostics"]))
+
+    def test_verifier_flags_semantically_wrong_role_under_valid_event_type(self) -> None:
+        state = make_state()
+        state["text"] = "Police arrested the suspect outside the station"
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": "",
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+        state["event"] = {
+            "event_type": "Justice:Arrest-Jail",
+            "trigger": {"text": "arrested", "modality": "text", "span": {"start": 7, "end": 15}},
+            "text_arguments": [
+                {"role": "Agent", "text": "suspect", "span": {"start": 20, "end": 27}},
+                {"role": "Person", "text": "Police", "span": {"start": 0, "end": 6}},
+            ],
+            "image_arguments": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"verdict":"NO","issues":["semantic role confusion: Agent vs Person"],"confidence":0.89,"reason":"the detainee and authority are swapped",'
+                    '"diagnostics":[{"field_path":"text_arguments[0].role","issue_type":"semantic_role_confusion","suggested_action":"replace_or_drop"},{"field_path":"text_arguments[1].role","issue_type":"semantic_role_confusion","suggested_action":"replace_or_drop"}]}'
+                ]
+            ),
+        ):
+            result = verifier(state)
+
+        self.assertFalse(result["verified"])
+        self.assertIn("semantic role confusion: Agent vs Person", result["issues"])
+        self.assertTrue(any(x["issue_type"] == "semantic_role_confusion" for x in result["verifier_diagnostics"]))
+
+    def test_verifier_flags_trigger_inconsistent_with_selected_event_type(self) -> None:
+        state = make_state()
+        state["text"] = "Leaders met in Geneva for talks"
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": "",
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+        state["event"] = {
+            "event_type": "Life:Die",
+            "trigger": {"text": "met", "modality": "text", "span": {"start": 8, "end": 11}},
+            "text_arguments": [{"role": "Place", "text": "Geneva", "span": {"start": 15, "end": 21}}],
+            "image_arguments": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"verdict":"NO","issues":["trigger meaning inconsistent with event_type"],"confidence":0.92,"reason":"meeting trigger does not match Life:Die semantics",'
+                    '"diagnostics":[{"field_path":"trigger","issue_type":"semantic_trigger_mismatch","suggested_action":"set_supported_event_type"}]}'
+                ]
+            ),
+        ):
+            result = verifier(state)
+
+        self.assertFalse(result["verified"])
+        self.assertIn("trigger meaning inconsistent with event_type", result["issues"])
+        self.assertTrue(any(x["issue_type"] == "semantic_trigger_mismatch" for x in result["verifier_diagnostics"]))
 
     def test_find_all_text_occurrences_returns_all_exact_matches(self) -> None:
         self.assertEqual(
