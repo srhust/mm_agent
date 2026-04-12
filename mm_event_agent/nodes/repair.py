@@ -53,6 +53,18 @@ def _format_issues(raw: Any) -> str:
     return "- (none listed)"
 
 
+def _format_diagnostics(raw: Any) -> str:
+    if not isinstance(raw, list) or not raw:
+        return "(none)"
+    lines: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            lines.append(json.dumps(item, ensure_ascii=False))
+        else:
+            lines.append(str(item))
+    return "\n".join(lines) if lines else "(none)"
+
+
 def _format_evidence_items(raw: Any) -> str:
     if not isinstance(raw, list) or not raw:
         return "(none)"
@@ -80,6 +92,7 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
     evidence = _format_evidence_items(state.get("evidence"))
     similar_block = _format_similar_events(state.get("similar_events"))
     issue_block = _format_issues(state.get("issues"))
+    diagnostics_block = _format_diagnostics(state.get("verifier_diagnostics"))
     raw_text = str(state.get("text") or "")
 
     prompt = (
@@ -92,11 +105,13 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         '- text_arguments items must be {"role": string, "text": string, "span": null}.\n'
         '- image_arguments items must be {"role": string, "label": string, "bbox": [x1, y1, x2, y2]}.\n'
         "- Keep trigger.text and text_arguments[].text copied from the original text when possible; do not paraphrase.\n"
+        "- Use verifier diagnostics for targeted repair when available; prefer local fixes over full regeneration.\n"
         "No markdown fences or commentary.\n\n"
         f"External evidence:\n{evidence}\n\n"
         f"Similar events (structural patterns):\n{similar_block}\n\n"
         f"Original text:\n{raw_text}\n\n"
         f"Verifier issues:\n{issue_block}\n\n"
+        f"Verifier diagnostics:\n{diagnostics_block}\n\n"
         f"Current event (JSON object):\n{json.dumps(current_event, ensure_ascii=False)}"
     )
 

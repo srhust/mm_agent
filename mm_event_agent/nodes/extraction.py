@@ -66,8 +66,8 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
         "Output a single JSON object with exactly this structure:\n"
         '{'
         '"event_type": string, '
-        '"trigger": {"text": string, "modality": "text", "span": [start, end] | null} | null, '
-        '"text_arguments": [{"role": string, "text": string, "span": [start, end] | null}], '
+        '"trigger": {"text": string, "modality": "text", "span": {"start": int, "end": int} | null} | null, '
+        '"text_arguments": [{"role": string, "text": string, "span": {"start": int, "end": int} | null}], '
         '"image_arguments": [{"role": string, "label": string, "bbox": [x1, y1, x2, y2]}]'
         '}\n\n'
         "Rules:\n"

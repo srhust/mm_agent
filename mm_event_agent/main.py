@@ -41,6 +41,7 @@ def main() -> None:
         # Control fields
         "verified": False,
         "issues": [],
+        "verifier_diagnostics": [],
         "verifier_confidence": 0.0,
         "verifier_reason": "",
         "repair_attempts": 0,

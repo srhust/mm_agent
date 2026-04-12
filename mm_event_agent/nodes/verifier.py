@@ -11,7 +11,13 @@ from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 from mm_event_agent.observability import log_node_event
-from mm_event_agent.schemas import empty_event, empty_fusion_context, extract_json_object, validate_event
+from mm_event_agent.schemas import (
+    VerificationDiagnostic,
+    empty_event,
+    empty_fusion_context,
+    extract_json_object,
+    validate_event,
+)
 
 _llm: ChatOpenAI | None = None
 
@@ -32,7 +38,9 @@ def _msg_text(content: Any) -> str:
     return str(content)
 
 
-def _normalize_verdict_payload(data: dict[str, Any]) -> tuple[str, list[str], bool, float, str]:
+def _normalize_verdict_payload(
+    data: dict[str, Any],
+) -> tuple[str, list[str], bool, float, str, list[VerificationDiagnostic]]:
     v = str(data.get("verdict", "NO")).strip().upper()
     verdict = "YES" if v == "YES" else "NO"
     raw_issues = data.get("issues")
@@ -51,14 +59,37 @@ def _normalize_verdict_payload(data: dict[str, Any]) -> tuple[str, list[str], bo
         confidence = 0.0
     confidence = max(0.0, min(1.0, confidence))
     reason = str(data.get("reason") or "").strip()
+    diagnostics = _normalize_diagnostics(data.get("diagnostics"))
     verified = verdict == "YES"
-    return verdict, issues, verified, confidence, reason
+    return verdict, issues, verified, confidence, reason, diagnostics
+
+
+def _normalize_diagnostics(raw: Any) -> list[VerificationDiagnostic]:
+    if not isinstance(raw, list):
+        return []
+    out: list[VerificationDiagnostic] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        field_path = str(item.get("field_path") or "").strip()
+        issue_type = str(item.get("issue_type") or "").strip()
+        suggested_action = str(item.get("suggested_action") or "").strip()
+        if field_path and issue_type and suggested_action:
+            out.append(
+                {
+                    "field_path": field_path,
+                    "issue_type": issue_type,
+                    "suggested_action": suggested_action,
+                }
+            )
+    return out
 
 
 def _is_valid_span(span: Any, source_text: str) -> bool:
-    if not isinstance(span, list) or len(span) != 2:
+    if not isinstance(span, dict):
         return False
-    start, end = span
+    start = span.get("start")
+    end = span.get("end")
     if not isinstance(start, int) or not isinstance(end, int):
         return False
     if start < 0 or end < start or end > len(source_text):
@@ -66,82 +97,202 @@ def _is_valid_span(span: Any, source_text: str) -> bool:
     return True
 
 
-def _validate_trigger_fields(event: Mapping[str, Any], raw_text: str) -> list[str]:
+def _validate_trigger_fields(
+    event: Mapping[str, Any],
+    raw_text: str,
+) -> tuple[list[str], list[VerificationDiagnostic]]:
     issues: list[str] = []
+    diagnostics: list[VerificationDiagnostic] = []
     trigger = event.get("trigger")
     if trigger is None:
-        return issues
+        return issues, diagnostics
     if not isinstance(trigger, dict):
-        return ["invalid trigger object"]
+        return ["invalid trigger object"], [
+            {
+                "field_path": "trigger",
+                "issue_type": "invalid_object",
+                "suggested_action": "drop_or_rebuild",
+            }
+        ]
 
     if trigger.get("modality") != "text":
         issues.append("invalid trigger modality")
+        diagnostics.append(
+            {
+                "field_path": "trigger.modality",
+                "issue_type": "invalid_modality",
+                "suggested_action": "set_text_modality_or_drop",
+            }
+        )
 
     span = trigger.get("span")
     text = str(trigger.get("text") or "")
     if span is not None:
         if not _is_valid_span(span, raw_text):
             issues.append("invalid trigger span")
-        elif raw_text[span[0] : span[1]] != text:
+            diagnostics.append(
+                {
+                    "field_path": "trigger.span",
+                    "issue_type": "invalid_span",
+                    "suggested_action": "realign_or_drop",
+                }
+            )
+        elif raw_text[span["start"] : span["end"]] != text:
             issues.append("trigger text/span mismatch")
-    return issues
+            diagnostics.append(
+                {
+                    "field_path": "trigger.span",
+                    "issue_type": "span_mismatch",
+                    "suggested_action": "realign_or_drop",
+                }
+            )
+    return issues, diagnostics
 
 
-def _validate_text_argument_fields(event: Mapping[str, Any], raw_text: str) -> list[str]:
+def _validate_text_argument_fields(
+    event: Mapping[str, Any],
+    raw_text: str,
+) -> tuple[list[str], list[VerificationDiagnostic]]:
     issues: list[str] = []
+    diagnostics: list[VerificationDiagnostic] = []
     text_arguments = event.get("text_arguments")
     if not isinstance(text_arguments, list):
-        return ["invalid text_arguments list"]
+        return ["invalid text_arguments list"], [
+            {
+                "field_path": "text_arguments",
+                "issue_type": "invalid_list",
+                "suggested_action": "drop_or_rebuild",
+            }
+        ]
 
     for index, item in enumerate(text_arguments):
         if not isinstance(item, dict):
             issues.append(f"invalid text argument object at index {index}")
+            diagnostics.append(
+                {
+                    "field_path": f"text_arguments[{index}]",
+                    "issue_type": "invalid_object",
+                    "suggested_action": "drop_or_rebuild",
+                }
+            )
             continue
         span = item.get("span")
         text = str(item.get("text") or "")
         if span is not None:
             if not _is_valid_span(span, raw_text):
                 issues.append(f"invalid text argument span at index {index}")
-            elif raw_text[span[0] : span[1]] != text:
+                diagnostics.append(
+                    {
+                        "field_path": f"text_arguments[{index}].span",
+                        "issue_type": "invalid_span",
+                        "suggested_action": "realign_or_drop",
+                    }
+                )
+            elif raw_text[span["start"] : span["end"]] != text:
                 issues.append(f"text argument span mismatch at index {index}")
-    return issues
+                diagnostics.append(
+                    {
+                        "field_path": f"text_arguments[{index}].span",
+                        "issue_type": "span_mismatch",
+                        "suggested_action": "realign_or_drop",
+                    }
+                )
+    return issues, diagnostics
 
 
-def _validate_image_argument_fields(event: Mapping[str, Any]) -> list[str]:
+def _validate_image_argument_fields(event: Mapping[str, Any]) -> tuple[list[str], list[VerificationDiagnostic]]:
     issues: list[str] = []
+    diagnostics: list[VerificationDiagnostic] = []
     image_arguments = event.get("image_arguments")
     if not isinstance(image_arguments, list):
-        return ["invalid image_arguments list"]
+        return ["invalid image_arguments list"], [
+            {
+                "field_path": "image_arguments",
+                "issue_type": "invalid_list",
+                "suggested_action": "drop_or_rebuild",
+            }
+        ]
 
     for index, item in enumerate(image_arguments):
         if not isinstance(item, dict):
             issues.append(f"invalid image argument object at index {index}")
+            diagnostics.append(
+                {
+                    "field_path": f"image_arguments[{index}]",
+                    "issue_type": "invalid_object",
+                    "suggested_action": "drop_or_rebuild",
+                }
+            )
             continue
         role = item.get("role")
         label = item.get("label")
         bbox = item.get("bbox")
         if not isinstance(role, str) or not role.strip():
             issues.append(f"invalid image argument role at index {index}")
+            diagnostics.append(
+                {
+                    "field_path": f"image_arguments[{index}].role",
+                    "issue_type": "missing_or_empty",
+                    "suggested_action": "fill_or_drop",
+                }
+            )
         if not isinstance(label, str) or not label.strip():
             issues.append(f"invalid image argument label at index {index}")
+            diagnostics.append(
+                {
+                    "field_path": f"image_arguments[{index}].label",
+                    "issue_type": "missing_or_empty",
+                    "suggested_action": "fill_or_drop",
+                }
+            )
         if not isinstance(bbox, list) or len(bbox) != 4:
             issues.append(f"invalid image argument bbox format at index {index}")
+            diagnostics.append(
+                {
+                    "field_path": f"image_arguments[{index}].bbox",
+                    "issue_type": "invalid_bbox_format",
+                    "suggested_action": "fix_or_drop",
+                }
+            )
             continue
         for value in bbox:
             if not isinstance(value, (int, float)):
                 issues.append(f"invalid image argument bbox format at index {index}")
+                diagnostics.append(
+                    {
+                        "field_path": f"image_arguments[{index}].bbox",
+                        "issue_type": "invalid_bbox_format",
+                        "suggested_action": "fix_or_drop",
+                    }
+                )
                 break
-    return issues
+    return issues, diagnostics
 
 
-def _collect_field_level_issues(raw_event: Any, raw_text: str) -> list[str]:
+def _collect_field_level_issues(
+    raw_event: Any,
+    raw_text: str,
+) -> tuple[list[str], list[VerificationDiagnostic]]:
     if not isinstance(raw_event, dict):
-        return ["invalid event object"]
+        return ["invalid event object"], [
+            {
+                "field_path": "event",
+                "issue_type": "invalid_object",
+                "suggested_action": "drop_or_rebuild",
+            }
+        ]
     issues: list[str] = []
-    issues.extend(_validate_trigger_fields(raw_event, raw_text))
-    issues.extend(_validate_text_argument_fields(raw_event, raw_text))
-    issues.extend(_validate_image_argument_fields(raw_event))
-    return issues
+    diagnostics: list[VerificationDiagnostic] = []
+    trigger_issues, trigger_diagnostics = _validate_trigger_fields(raw_event, raw_text)
+    text_issues, text_diagnostics = _validate_text_argument_fields(raw_event, raw_text)
+    image_issues, image_diagnostics = _validate_image_argument_fields(raw_event)
+    issues.extend(trigger_issues)
+    issues.extend(text_issues)
+    issues.extend(image_issues)
+    diagnostics.extend(trigger_diagnostics)
+    diagnostics.extend(text_diagnostics)
+    diagnostics.extend(image_diagnostics)
+    return issues, diagnostics
 
 
 def _merge_issues(field_issues: list[str], llm_issues: list[str]) -> list[str]:
@@ -150,6 +301,20 @@ def _merge_issues(field_issues: list[str], llm_issues: list[str]) -> list[str]:
         text = str(issue).strip()
         if text and text not in merged:
             merged.append(text)
+    return merged
+
+
+def _merge_diagnostics(
+    field_diagnostics: list[VerificationDiagnostic],
+    llm_diagnostics: list[VerificationDiagnostic],
+) -> list[VerificationDiagnostic]:
+    merged: list[VerificationDiagnostic] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in field_diagnostics + llm_diagnostics:
+        key = (item["field_path"], item["issue_type"], item["suggested_action"])
+        if key not in seen:
+            seen.add(key)
+            merged.append(item)
     return merged
 
 
@@ -170,11 +335,18 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         )
     raw_text = str(fusion_context.get("raw_text") or "")
     raw_event = state.get("event")
-    field_issues = _collect_field_level_issues(raw_event, raw_text)
+    field_issues, field_diagnostics = _collect_field_level_issues(raw_event, raw_text)
     try:
         event = validate_event(raw_event)
     except Exception as exc:
         field_issues.append(str(exc))
+        field_diagnostics.append(
+            {
+                "field_path": "event",
+                "issue_type": "schema_validation_failed",
+                "suggested_action": "drop_or_rebuild",
+            }
+        )
         event = empty_event()
 
     prompt = (
@@ -189,9 +361,9 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         "fusion_context.patterns when patterns are available?\n"
         "5) If text, image, and evidence conflict with patterns, prefer grounded support over patterns.\n\n"
         "Return ONLY one JSON object (no markdown), exactly this shape:\n"
-        '{"verdict": "YES" or "NO", "issues": ["unsupported argument", "wrong event type", ...], "confidence": 0.0, "reason": "short explanation"}\n'
+        '{"verdict": "YES" or "NO", "issues": ["unsupported argument", "wrong event type", ...], "confidence": 0.0, "reason": "short explanation", "diagnostics": [{"field_path": "trigger.span", "issue_type": "span_mismatch", "suggested_action": "realign_or_drop"}]}\n'
         "Use an empty issues array when verdict is YES. Confidence must be a float from 0 to 1. "
-        "Reason must be a short explanation.\n\n"
+        "Reason must be a short explanation. diagnostics is optional but should be included when you can localize a field-level problem.\n\n"
         f"fusion_context:\n{json.dumps(fusion_context, ensure_ascii=False)}\n\n"
         f"Structured event:\n{json.dumps(event, ensure_ascii=False)}"
     )
@@ -201,13 +373,24 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         parsed = extract_json_object(raw)
         if parsed is None:
             issues = _merge_issues(field_issues, ["invalid verifier output (not valid JSON object)"])
+            diagnostics = _merge_diagnostics(
+                field_diagnostics,
+                [
+                    {
+                        "field_path": "event",
+                        "issue_type": "invalid_verifier_output",
+                        "suggested_action": "retry_or_repair",
+                    }
+                ],
+            )
             verified = False
             confidence = 0.0
             reason = "invalid verifier output"
             success = False
         else:
-            _, llm_issues, llm_verified, confidence, reason = _normalize_verdict_payload(parsed)
+            _, llm_issues, llm_verified, confidence, reason, llm_diagnostics = _normalize_verdict_payload(parsed)
             issues = _merge_issues(field_issues, llm_issues)
+            diagnostics = _merge_diagnostics(field_diagnostics, llm_diagnostics)
             verified = llm_verified and not issues
             success = True
             if issues and not reason:
@@ -215,6 +398,7 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         result = {
             "verified": verified,
             "issues": issues,
+            "verifier_diagnostics": diagnostics,
             "verifier_confidence": confidence,
             "verifier_reason": reason,
         }
@@ -231,6 +415,13 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         result = {
             "verified": False,
             "issues": [str(exc)],
+            "verifier_diagnostics": [
+                {
+                    "field_path": "event",
+                    "issue_type": "verifier_failure",
+                    "suggested_action": "retry_or_repair",
+                }
+            ],
             "verifier_confidence": 0.0,
             "verifier_reason": "verifier failure",
         }

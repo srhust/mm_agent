@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from mm_event_agent.schemas import Event, EvidenceItem, FusionContext
+from mm_event_agent.schemas import Event, EvidenceItem, FusionContext, VerificationDiagnostic
 
 
 class AgentState(TypedDict):
@@ -27,6 +27,7 @@ class AgentState(TypedDict):
     # Control fields: verifier/repair loop only.
     verified: bool
     issues: list[str]
+    verifier_diagnostics: list[VerificationDiagnostic]
     verifier_confidence: float
     verifier_reason: str
     repair_attempts: int

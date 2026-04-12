@@ -19,13 +19,13 @@ class TextSpan(TypedDict):
 class Trigger(TypedDict):
     text: str
     modality: str
-    span: list[int] | None
+    span: TextSpan | None
 
 
 class TextArgument(TypedDict):
     role: str
     text: str
-    span: list[int] | None
+    span: TextSpan | None
 
 
 class ImageArgument(TypedDict):
@@ -48,6 +48,12 @@ class EvidenceItem(TypedDict):
     source_type: str
     published_at: str | None
     score: float
+
+
+class VerificationDiagnostic(TypedDict):
+    field_path: str
+    issue_type: str
+    suggested_action: str
 
 
 class FusionContext(TypedDict):
@@ -134,23 +140,32 @@ def parse_event_json(text: str) -> Event:
 
 
 def attach_text_spans(event: Event, raw_text: str) -> Event:
+    anchor_spans: list[TextSpan] = []
     trigger = event["trigger"]
     if trigger is not None:
-        trigger = {
-            "text": trigger["text"],
-            "modality": "text",
-            "span": find_text_span(raw_text, trigger["text"]),
-        }
+        trigger_span = find_text_span(raw_text, trigger["text"], anchor_spans=anchor_spans)
+        if trigger_span is not None:
+            trigger = {
+                "text": trigger["text"],
+                "modality": "text",
+                "span": trigger_span,
+            }
+            anchor_spans.append(trigger_span)
+        else:
+            trigger = None
 
     text_arguments: list[TextArgument] = []
     for item in event["text_arguments"]:
-        text_arguments.append(
-            {
-                "role": item["role"],
-                "text": item["text"],
-                "span": find_text_span(raw_text, item["text"]),
-            }
-        )
+        span = find_text_span(raw_text, item["text"], anchor_spans=anchor_spans)
+        if span is not None:
+            text_arguments.append(
+                {
+                    "role": item["role"],
+                    "text": item["text"],
+                    "span": span,
+                }
+            )
+            anchor_spans.append(span)
 
     return {
         "event_type": event["event_type"],
@@ -259,20 +274,73 @@ def _validate_image_argument(data: Any) -> ImageArgument:
 def _validate_span(span: Any) -> list[int] | None:
     if span is None:
         return None
-    if not isinstance(span, list) or len(span) != 2:
-        raise ValidationError("span must be null or [start, end]")
-    start, end = span
+    if isinstance(span, dict):
+        start = span.get("start")
+        end = span.get("end")
+    elif isinstance(span, list) and len(span) == 2:
+        start, end = span
+    else:
+        raise ValidationError('span must be null, {"start": int, "end": int}, or [start, end]')
     if not isinstance(start, int) or not isinstance(end, int) or start < 0 or end < start:
         raise ValidationError("span values must be valid non-negative integers")
-    return [start, end]
+    return {"start": start, "end": end}
 
 
-def find_text_span(source_text: str, value: str) -> list[int] | None:
+def find_all_text_occurrences(source_text: str, value: str) -> list[TextSpan]:
     source = str(source_text or "")
     target = str(value or "")
     if not source or not target:
+        return []
+
+    matches: list[TextSpan] = []
+    start = 0
+    while True:
+        index = source.find(target, start)
+        if index < 0:
+            break
+        matches.append({"start": index, "end": index + len(target)})
+        start = index + 1
+    return matches
+
+
+def choose_best_span(
+    occurrences: list[TextSpan],
+    anchor_spans: list[TextSpan] | None = None,
+) -> TextSpan | None:
+    if not occurrences:
         return None
-    start = source.find(target)
-    if start < 0:
+    if len(occurrences) == 1:
+        return occurrences[0]
+
+    anchors = [
+        span
+        for span in (anchor_spans or [])
+        if isinstance(span, dict)
+        and isinstance(span.get("start"), int)
+        and isinstance(span.get("end"), int)
+    ]
+    if not anchors:
         return None
-    return [start, start + len(target)]
+
+    scored: list[tuple[float, TextSpan]] = []
+    for occurrence in occurrences:
+        occ_mid = (occurrence["start"] + occurrence["end"]) / 2.0
+        min_distance = min(
+            abs(occ_mid - ((anchor["start"] + anchor["end"]) / 2.0))
+            for anchor in anchors
+        )
+        scored.append((min_distance, occurrence))
+
+    scored.sort(key=lambda item: item[0])
+    if len(scored) >= 2 and scored[0][0] == scored[1][0]:
+        return None
+    return scored[0][1]
+
+
+def find_text_span(
+    source_text: str,
+    value: str,
+    anchor_spans: list[TextSpan] | None = None,
+) -> TextSpan | None:
+    occurrences = find_all_text_occurrences(source_text, value)
+    return choose_best_span(occurrences, anchor_spans=anchor_spans)
