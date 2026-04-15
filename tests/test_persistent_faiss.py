@@ -30,6 +30,7 @@ class PersistentFaissTests(unittest.TestCase):
                 metadata,
                 encoder_name_or_path="local-model",
                 normalized=True,
+                build_info={"encoder_type": "qwen3_vl_embedding", "instruction": "retrieve"},
             )
             index.save()
 
@@ -38,6 +39,7 @@ class PersistentFaissTests(unittest.TestCase):
             self.assertEqual(loaded.index.ntotal, 2)
             self.assertEqual(loaded.metadata[0]["id"], "a")
             self.assertEqual(loaded.build_info["record_count"], 2)
+            self.assertEqual(loaded.build_info["encoder_type"], "qwen3_vl_embedding")
 
     def test_search_returns_ranked_results(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

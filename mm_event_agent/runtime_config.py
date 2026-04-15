@@ -70,6 +70,13 @@ class Settings:
     rag_index_root: str
     rag_text_encoder_model: str
     rag_text_encoder_model_path: str
+    rag_qwen_embedding_model_path: str
+    rag_qwen_embedding_device: str
+    rag_qwen_embedding_dtype: str
+    rag_qwen_embedding_attn_impl: str
+    rag_qwen_text_instruction: str
+    rag_qwen_embedding_out_dim: int
+    rag_qwen_embedding_normalize: bool
     rag_image_encoder_model_path: str
     rag_image_encoder_device: str
     rag_ace_text_index_dir: str
@@ -108,6 +115,17 @@ def load_settings() -> Settings:
         rag_index_root=_env_str("MM_EVENT_RAG_INDEX_ROOT", "data/rag/indexes") or "data/rag/indexes",
         rag_text_encoder_model=_env_str("MM_EVENT_RAG_TEXT_ENCODER_MODEL", "sentence-transformers/all-MiniLM-L6-v2") or "sentence-transformers/all-MiniLM-L6-v2",
         rag_text_encoder_model_path=_env_str("MM_EVENT_RAG_TEXT_ENCODER_MODEL_PATH", ""),
+        rag_qwen_embedding_model_path=_env_str("MM_EVENT_RAG_QWEN_EMBEDDING_MODEL_PATH", ""),
+        rag_qwen_embedding_device=_env_str("MM_EVENT_RAG_QWEN_EMBEDDING_DEVICE", "cuda:0") or "cuda:0",
+        rag_qwen_embedding_dtype=_env_str("MM_EVENT_RAG_QWEN_EMBEDDING_DTYPE", "bfloat16") or "bfloat16",
+        rag_qwen_embedding_attn_impl=_env_str("MM_EVENT_RAG_QWEN_EMBEDDING_ATTN_IMPL", "sdpa") or "sdpa",
+        rag_qwen_text_instruction=_env_str(
+            "MM_EVENT_RAG_QWEN_TEXT_INSTRUCTION",
+            "Retrieve text relevant to the user's query.",
+        )
+        or "Retrieve text relevant to the user's query.",
+        rag_qwen_embedding_out_dim=max(0, _env_int("MM_EVENT_RAG_QWEN_EMBEDDING_OUT_DIM", 0)),
+        rag_qwen_embedding_normalize=_env_flag("MM_EVENT_RAG_QWEN_EMBEDDING_NORMALIZE", True),
         rag_image_encoder_model_path=_env_str("MM_EVENT_RAG_IMAGE_ENCODER_MODEL_PATH", ""),
         rag_image_encoder_device=_env_str("MM_EVENT_RAG_IMAGE_ENCODER_DEVICE", ""),
         rag_ace_text_index_dir=_env_str("MM_EVENT_RAG_ACE_TEXT_INDEX_DIR", ""),

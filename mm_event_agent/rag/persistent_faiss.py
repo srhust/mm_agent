@@ -7,10 +7,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-import faiss
 import numpy as np
 
 from mm_event_agent.rag.jsonl_io import load_jsonl, write_jsonl
+
+try:  # pragma: no cover - dependency availability varies by environment
+    import faiss
+except ImportError:  # pragma: no cover - dependency availability varies by environment
+    faiss = None
+
+
+def _require_faiss():
+    if faiss is None:
+        raise ImportError("faiss is required for persistent index build/load/search operations")
+    return faiss
 
 
 @dataclass(frozen=True)
@@ -55,6 +65,7 @@ class PersistentFaissIndex:
         encoder_name_or_path: str,
         normalized: bool,
         index_type: str = "IndexFlatIP",
+        build_info: dict[str, Any] | None = None,
     ) -> None:
         vectors = np.asarray(embeddings, dtype=np.float32)
         if vectors.ndim != 2:
@@ -63,20 +74,28 @@ class PersistentFaissIndex:
             raise ValueError("metadata row count must match embedding rows")
         if vectors.shape[0] == 0:
             raise ValueError("cannot build persistent index from zero embeddings")
+        if not np.isfinite(vectors).all():
+            raise ValueError("embeddings must contain only finite float values")
 
-        index = faiss.IndexFlatIP(vectors.shape[1])
+        faiss_module = _require_faiss()
+        index = faiss_module.IndexFlatIP(vectors.shape[1])
         index.add(vectors)
 
         self.index = index
         self.metadata = [dict(item) for item in metadata]
-        self.build_info = {
+        merged_build_info = dict(build_info or {})
+        merged_build_info.update(
+            {
             "index_name": self.index_name,
+            "encoder_name": str(encoder_name_or_path),
             "encoder_name_or_path": str(encoder_name_or_path),
             "normalized": bool(normalized),
             "vector_dim": int(vectors.shape[1]),
             "index_type": str(index_type),
             "record_count": int(vectors.shape[0]),
-        }
+            }
+        )
+        self.build_info = merged_build_info
 
     @classmethod
     def load(cls, root_dir: str | Path) -> "PersistentFaissIndex":
@@ -89,7 +108,8 @@ class PersistentFaissIndex:
         if missing:
             raise FileNotFoundError(f"missing persistent FAISS artifacts: {missing}")
 
-        index = faiss.read_index(str(paths.index_path))
+        faiss_module = _require_faiss()
+        index = faiss_module.read_index(str(paths.index_path))
         metadata = load_jsonl(paths.meta_path)
         build_info = json.loads(paths.build_info_path.read_text(encoding="utf-8"))
         if not isinstance(build_info, dict):
@@ -166,7 +186,8 @@ class PersistentFaissIndex:
             raise ValueError("cannot save: FAISS row count does not match metadata length")
 
         self.artifact_paths.root_dir.mkdir(parents=True, exist_ok=True)
-        faiss.write_index(self.index, str(self.artifact_paths.index_path))
+        faiss_module = _require_faiss()
+        faiss_module.write_index(self.index, str(self.artifact_paths.index_path))
         write_jsonl(self.artifact_paths.meta_path, self.metadata)
         self.artifact_paths.build_info_path.write_text(
             json.dumps(self.build_info, ensure_ascii=False, indent=2),

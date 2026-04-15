@@ -8,14 +8,14 @@ from typing import Any
 from mm_event_agent.runtime_config import settings
 from mm_event_agent.schemas import attach_retrieval_metadata
 from mm_event_agent.rag.persistent_faiss import PersistentFaissIndex
-from mm_event_agent.rag.text_encoder import SentenceTransformerTextEncoder
+from mm_event_agent.rag.text_encoder import Qwen3VLTextEncoder
 
 
 class RagStoreRegistry:
     def __init__(
         self,
         *,
-        encoder: SentenceTransformerTextEncoder | None = None,
+        encoder: Any | None = None,
         index_root: str | Path | None = None,
         ace_text_dir: str | Path | None = None,
         maven_text_dir: str | Path | None = None,
@@ -23,8 +23,16 @@ class RagStoreRegistry:
         bridge_dir: str | Path | None = None,
     ) -> None:
         self._index_root = Path(index_root or settings.rag_index_root)
-        encoder_source = settings.rag_text_encoder_model_path or settings.rag_text_encoder_model
-        self._encoder = encoder or SentenceTransformerTextEncoder(encoder_source, normalize=True)
+        encoder_source = settings.rag_qwen_embedding_model_path or settings.rag_text_encoder_model_path
+        self._encoder = encoder or Qwen3VLTextEncoder(
+            model_path=encoder_source,
+            device=settings.rag_qwen_embedding_device,
+            dtype=settings.rag_qwen_embedding_dtype,
+            attn_impl=settings.rag_qwen_embedding_attn_impl,
+            instruction=settings.rag_qwen_text_instruction,
+            out_dim=settings.rag_qwen_embedding_out_dim,
+            normalize=settings.rag_qwen_embedding_normalize,
+        )
         self._indexes: dict[str, PersistentFaissIndex] = {}
 
         configured_paths = {

@@ -159,11 +159,15 @@ class RagDocumentMeta(TypedDict, total=False):
 
 class RagIndexBuildInfo(TypedDict, total=False):
     index_name: str
+    encoder_type: str
     index_type: str
     encoder_name: str
+    encoder_name_or_path: str
+    instruction: str
     vector_dim: int
     normalized: bool
     doc_count: int
+    record_count: int
     built_at: str
     index_path: str
     meta_path: str
