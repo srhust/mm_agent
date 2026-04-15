@@ -57,6 +57,52 @@ class PersistentFaissIndex:
         self.metadata = list(metadata or [])
         self.build_info = dict(build_info or {})
 
+    def initialize_empty(
+        self,
+        *,
+        vector_dim: int,
+        encoder_name_or_path: str,
+        normalized: bool,
+        index_type: str = "IndexFlatIP",
+        build_info: dict[str, Any] | None = None,
+    ) -> None:
+        if vector_dim <= 0:
+            raise ValueError("vector_dim must be positive")
+        faiss_module = _require_faiss()
+        self.index = faiss_module.IndexFlatIP(int(vector_dim))
+        self.metadata = []
+        merged_build_info = dict(build_info or {})
+        merged_build_info.update(
+            {
+                "index_name": self.index_name,
+                "encoder_name": str(encoder_name_or_path),
+                "encoder_name_or_path": str(encoder_name_or_path),
+                "normalized": bool(normalized),
+                "vector_dim": int(vector_dim),
+                "index_type": str(index_type),
+                "record_count": 0,
+            }
+        )
+        self.build_info = merged_build_info
+
+    def add_embeddings(self, embeddings: np.ndarray, metadata: Sequence[dict[str, Any]]) -> None:
+        if self.index is None:
+            raise ValueError("index is not loaded")
+        vectors = np.asarray(embeddings, dtype=np.float32)
+        if vectors.ndim != 2:
+            raise ValueError(f"embeddings must be 2D, got shape {vectors.shape}")
+        if len(metadata) != vectors.shape[0]:
+            raise ValueError("metadata row count must match embedding rows")
+        if vectors.shape[0] == 0:
+            return
+        if self.index.d != vectors.shape[1]:
+            raise ValueError(f"embedding dimension {vectors.shape[1]} does not match index dimension {self.index.d}")
+        if not np.isfinite(vectors).all():
+            raise ValueError("embeddings must contain only finite float values")
+        self.index.add(vectors)
+        self.metadata.extend(dict(item) for item in metadata)
+        self.build_info["record_count"] = len(self.metadata)
+
     def build_from_embeddings(
         self,
         embeddings: np.ndarray,
@@ -76,26 +122,14 @@ class PersistentFaissIndex:
             raise ValueError("cannot build persistent index from zero embeddings")
         if not np.isfinite(vectors).all():
             raise ValueError("embeddings must contain only finite float values")
-
-        faiss_module = _require_faiss()
-        index = faiss_module.IndexFlatIP(vectors.shape[1])
-        index.add(vectors)
-
-        self.index = index
-        self.metadata = [dict(item) for item in metadata]
-        merged_build_info = dict(build_info or {})
-        merged_build_info.update(
-            {
-            "index_name": self.index_name,
-            "encoder_name": str(encoder_name_or_path),
-            "encoder_name_or_path": str(encoder_name_or_path),
-            "normalized": bool(normalized),
-            "vector_dim": int(vectors.shape[1]),
-            "index_type": str(index_type),
-            "record_count": int(vectors.shape[0]),
-            }
+        self.initialize_empty(
+            vector_dim=int(vectors.shape[1]),
+            encoder_name_or_path=encoder_name_or_path,
+            normalized=normalized,
+            index_type=index_type,
+            build_info=build_info,
         )
-        self.build_info = merged_build_info
+        self.add_embeddings(vectors, metadata)
 
     @classmethod
     def load(cls, root_dir: str | Path) -> "PersistentFaissIndex":

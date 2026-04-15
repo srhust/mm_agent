@@ -45,6 +45,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=settings.rag_qwen_embedding_out_dim,
         help="Optional output dimension cap. Zero keeps the native embedding width.",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=8,
+        help="Qwen text encoding batch size.",
+    )
+    parser.add_argument(
+        "--max-length",
+        type=int,
+        default=256,
+        help="Maximum tokenized text length for retrieval_text encoding.",
+    )
     parser.add_argument("--no-normalize", action="store_true", help="Disable L2 normalization.")
     return parser.parse_args(argv)
 
@@ -83,6 +95,8 @@ def _build_single_index(
     model_path: str,
     instruction: str,
     normalize: bool,
+    batch_size: int,
+    max_length: int,
 ) -> dict[str, object]:
     from mm_event_agent.rag.jsonl_io import load_jsonl
     from mm_event_agent.rag.persistent_faiss import IndexArtifactPaths, PersistentFaissIndex
@@ -91,41 +105,59 @@ def _build_single_index(
     if not usable_records:
         raise ValueError(f"no indexable records with retrieval_text found in {input_path}")
 
-    vectors = encoder.encode(texts)
     output_dir = index_root / index_name
-    metadata: list[dict] = []
-    for row, record in enumerate(usable_records):
-        meta = dict(record)
-        meta.setdefault("id", "")
-        meta.setdefault("source_dataset", "")
-        meta.setdefault("event_type", "")
-        meta.setdefault("retrieval_text", "")
-        meta.setdefault("row", row)
-        metadata.append(meta)
 
     index = PersistentFaissIndex(
         IndexArtifactPaths.from_root(output_dir),
         index_name=index_name,
     )
-    index.build_from_embeddings(
-        vectors,
-        metadata,
+    effective_batch_size = max(1, int(batch_size))
+    effective_max_length = max(1, int(max_length))
+    first_batch_size = min(effective_batch_size, len(texts))
+    first_vectors = encoder.encode(
+        texts[:first_batch_size],
+        batch_size=effective_batch_size,
+        max_length=effective_max_length,
+    )
+    if first_vectors.ndim != 2 or first_vectors.shape[0] != first_batch_size:
+        raise ValueError("encoder returned unexpected shape for first batch")
+    index.initialize_empty(
+        vector_dim=int(first_vectors.shape[1]),
         encoder_name_or_path=model_path,
         normalized=normalize,
         build_info={
-            "index_name": index_name,
-            "encoder_type": "qwen3_vl_embedding",
-            "encoder_name_or_path": model_path,
-            "instruction": instruction,
-            "normalized": normalize,
-            "vector_dim": int(vectors.shape[1]),
-            "index_type": "IndexFlatIP",
-            "record_count": len(metadata),
-            "built_at": datetime.now(timezone.utc).isoformat(),
-            "source_path": str(input_path),
-            "skip_reasons": dict(skipped_by_reason),
+        "index_name": index_name,
+        "encoder_type": "qwen3_vl_embedding",
+        "encoder_name_or_path": model_path,
+        "instruction": instruction,
+        "normalized": normalize,
+        "index_type": "IndexFlatIP",
+        "built_at": datetime.now(timezone.utc).isoformat(),
+        "source_path": str(input_path),
+        "skip_reasons": dict(skipped_by_reason),
+        "batch_size": effective_batch_size,
+        "max_length": effective_max_length,
         },
     )
+
+    for start in range(0, len(usable_records), effective_batch_size):
+        stop = min(start + effective_batch_size, len(usable_records))
+        batch_metadata: list[dict] = []
+        for row, record in enumerate(usable_records[start:stop], start=start):
+            meta = dict(record)
+            meta.setdefault("id", "")
+            meta.setdefault("source_dataset", "")
+            meta.setdefault("event_type", "")
+            meta.setdefault("retrieval_text", "")
+            meta.setdefault("row", row)
+            batch_metadata.append(meta)
+        batch_vectors = first_vectors if start == 0 else encoder.encode(
+            texts[start:stop],
+            batch_size=effective_batch_size,
+            max_length=effective_max_length,
+        )
+        index.add_embeddings(batch_vectors, batch_metadata)
+
     index.save()
     return {
         "index_name": index_name,
@@ -167,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
             model_path=args.model_path,
             instruction=args.instruction,
             normalize=not args.no_normalize,
+            batch_size=args.batch_size,
+            max_length=args.max_length,
         )
         print(f"index_name={summary['index_name']}")
         print(f"total_input_records={summary['total_input_records']}")

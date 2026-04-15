@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from typing import Sequence
-
+from dataclasses import dataclass
 import numpy as np
 
 try:  # pragma: no cover - exercised via mocks in unit tests
@@ -61,6 +61,8 @@ def _resolve_torch_dtype(dtype: str):
     return mapping[normalized]
 
 
+
+@dataclass
 class Qwen3VLForEmbeddingOutput(ModelOutput):  # pragma: no cover - thin container
     last_hidden_state: "torch.FloatTensor | None" = None
     attention_mask: "torch.Tensor | None" = None
@@ -69,6 +71,7 @@ class Qwen3VLForEmbeddingOutput(ModelOutput):  # pragma: no cover - thin contain
 class Qwen3VLForEmbedding(Qwen3VLPreTrainedModel):  # pragma: no cover - exercised via backend mocks
     _checkpoint_conversion_mapping = {}
     accepts_loss_kwargs = False
+    config_class = Qwen3VLConfig
     config: "Qwen3VLConfig"
 
     def __init__(self, config: "Qwen3VLConfig"):
@@ -152,11 +155,38 @@ class _Qwen3VLTextModel:
             local_files_only=True,
         )
 
-    def encode_texts(self, texts: Sequence[str], *, instruction: str) -> np.ndarray:
+    def encode_texts(
+        self,
+        texts: Sequence[str],
+        *,
+        instruction: str,
+        batch_size: int = 8,
+        max_length: int = 256,
+    ) -> np.ndarray:
         if not texts:
             return np.zeros((0, 0), dtype=np.float32)
+        batches: list[np.ndarray] = []
+        effective_batch_size = max(1, int(batch_size))
+        normalized_texts = [str(text) for text in texts]
+        for start in range(0, len(normalized_texts), effective_batch_size):
+            batches.append(
+                self._encode_text_batch(
+                    normalized_texts[start : start + effective_batch_size],
+                    instruction=instruction,
+                    max_length=max_length,
+                )
+            )
+        return np.concatenate(batches, axis=0) if batches else np.zeros((0, 0), dtype=np.float32)
+
+    def _encode_text_batch(
+        self,
+        texts: Sequence[str],
+        *,
+        instruction: str,
+        max_length: int,
+    ) -> np.ndarray:
         conversations = [self._format_text_conversation(str(text), instruction=instruction) for text in texts]
-        model_inputs = self._preprocess_inputs(conversations)
+        model_inputs = self._preprocess_inputs(conversations, max_length=max_length)
         model_inputs = {
             key: value.to(self.device) if hasattr(value, "to") else value
             for key, value in model_inputs.items()
@@ -181,7 +211,12 @@ class _Qwen3VLTextModel:
             },
         ]
 
-    def _preprocess_inputs(self, conversations: list[list[dict[str, object]]]) -> dict[str, "torch.Tensor"]:
+    def _preprocess_inputs(
+        self,
+        conversations: list[list[dict[str, object]]],
+        *,
+        max_length: int,
+    ) -> dict[str, "torch.Tensor"]:
         texts = [
             self.processor.apply_chat_template(conv, add_generation_prompt=True, tokenize=False)
             for conv in conversations
@@ -200,6 +235,7 @@ class _Qwen3VLTextModel:
             images=images,
             videos=videos,
             truncation=True,
+            max_length=max(1, int(max_length)),
             padding=True,
             return_tensors="pt",
             **extra_kwargs,
@@ -241,9 +277,19 @@ class Qwen3VLTextEncoder:
             attn_impl=self.attn_impl,
         )
 
-    def encode(self, texts: Sequence[str]) -> np.ndarray:
+    def encode(self, texts: Sequence[str], batch_size: int = 8, max_length: int = 256) -> np.ndarray:
+        normalized_texts = [str(text) for text in texts]
+        if not normalized_texts:
+            return np.zeros((0, 0), dtype=np.float32)
+        effective_batch_size = max(1, int(batch_size))
+        effective_max_length = max(1, int(max_length))
         array = np.asarray(
-            self._backend.encode_texts([str(text) for text in texts], instruction=self.instruction),
+            self._backend.encode_texts(
+                normalized_texts,
+                instruction=self.instruction,
+                batch_size=effective_batch_size,
+                max_length=effective_max_length,
+            ),
             dtype=np.float32,
         )
         if array.ndim == 1:
@@ -256,4 +302,11 @@ class Qwen3VLTextEncoder:
             norms = np.linalg.norm(array, axis=1, keepdims=True)
             norms = np.where(norms == 0.0, 1.0, norms)
             array = array / norms
+        if (
+            torch is not None
+            and hasattr(torch, "cuda")
+            and torch.cuda.is_available()
+            and self.device.startswith("cuda")
+        ):
+            torch.cuda.empty_cache()
         return array.astype(np.float32, copy=False)

@@ -88,6 +88,31 @@ class PersistentFaissTests(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertEqual(results[0]["meta"]["id"], "b")
 
+    def test_incremental_add_path_keeps_row_alignment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "ace_text"
+            index = PersistentFaissIndex(IndexArtifactPaths.from_root(root), index_name="ace_text")
+            index.initialize_empty(
+                vector_dim=2,
+                encoder_name_or_path="local-model",
+                normalized=True,
+                build_info={"encoder_type": "qwen3_vl_embedding", "batch_size": 2, "max_length": 256},
+            )
+            index.add_embeddings(
+                np.asarray([[1.0, 0.0]], dtype=np.float32),
+                [{"id": "a", "event_type": "Conflict:Attack", "retrieval_text": "attack"}],
+            )
+            index.add_embeddings(
+                np.asarray([[0.0, 1.0]], dtype=np.float32),
+                [{"id": "b", "event_type": "Life:Die", "retrieval_text": "die"}],
+            )
+
+            self.assertEqual(index.index.ntotal, 2)
+            self.assertEqual(len(index.metadata), 2)
+            self.assertEqual(index.metadata[0]["id"], "a")
+            self.assertEqual(index.metadata[1]["id"], "b")
+            self.assertEqual(index.build_info["record_count"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

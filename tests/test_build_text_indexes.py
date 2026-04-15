@@ -30,8 +30,16 @@ class FakeQwenEncoder:
         self.instruction = instruction
         self.out_dim = out_dim
         self.normalize = normalize
+        self.calls: list[dict[str, object]] = []
 
-    def encode(self, texts):
+    def encode(self, texts, batch_size: int = 8, max_length: int = 256):
+        self.calls.append(
+            {
+                "texts": list(texts),
+                "batch_size": batch_size,
+                "max_length": max_length,
+            }
+        )
         return np.asarray([[1.0, 0.0, 0.0] for _ in texts], dtype=np.float32)
 
 
@@ -45,6 +53,8 @@ class BuildTextIndexesTests(unittest.TestCase):
                 "\n".join(
                     [
                         json.dumps({"id": "a", "event_type": "Conflict:Attack", "retrieval_text": "attack market"}),
+                        json.dumps({"id": "c", "event_type": "Conflict:Attack", "retrieval_text": "attack smoke"}),
+                        json.dumps({"id": "d", "event_type": "Life:Die", "retrieval_text": "death scene"}),
                         json.dumps({"id": "b", "event_type": "Life:Die", "retrieval_text": ""}),
                     ]
                 )
@@ -53,7 +63,14 @@ class BuildTextIndexesTests(unittest.TestCase):
             )
             out_root = root / "indexes"
 
-            with patch.object(build_text_indexes, "Qwen3VLTextEncoder", FakeQwenEncoder):
+            created_encoders: list[FakeQwenEncoder] = []
+
+            def make_encoder(*args, **kwargs):
+                encoder = FakeQwenEncoder(*args, **kwargs)
+                created_encoders.append(encoder)
+                return encoder
+
+            with patch.object(build_text_indexes, "Qwen3VLTextEncoder", make_encoder):
                 exit_code = build_text_indexes.main(
                     [
                         "--inputs",
@@ -64,10 +81,15 @@ class BuildTextIndexesTests(unittest.TestCase):
                         "E:/models/Qwen3-VL-Embedding",
                         "--instruction",
                         "retrieve text",
+                        "--batch-size",
+                        "2",
+                        "--max-length",
+                        "384",
                     ]
                 )
 
             self.assertEqual(exit_code, 0)
+            self.assertEqual(len(created_encoders), 1)
             index_dir = out_root / "ace_text"
             self.assertTrue((index_dir / "index.faiss").exists())
             self.assertTrue((index_dir / "meta.jsonl").exists())
@@ -77,8 +99,14 @@ class BuildTextIndexesTests(unittest.TestCase):
             self.assertEqual(build_info["encoder_type"], "qwen3_vl_embedding")
             self.assertEqual(build_info["encoder_name_or_path"], "E:/models/Qwen3-VL-Embedding")
             self.assertEqual(build_info["instruction"], "retrieve text")
-            self.assertEqual(build_info["record_count"], 1)
+            self.assertEqual(build_info["record_count"], 3)
             self.assertEqual(build_info["skip_reasons"], {"missing_retrieval_text": 1})
+            self.assertEqual(build_info["batch_size"], 2)
+            self.assertEqual(build_info["max_length"], 384)
+            self.assertEqual(created_encoders[0].calls[0]["batch_size"], 2)
+            self.assertEqual(created_encoders[0].calls[0]["max_length"], 384)
+            self.assertEqual(created_encoders[0].calls[0]["texts"], ["attack market", "attack smoke"])
+            self.assertEqual(created_encoders[0].calls[1]["texts"], ["death scene"])
 
 
 if __name__ == "__main__":
