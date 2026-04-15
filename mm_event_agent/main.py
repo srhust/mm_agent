@@ -80,8 +80,17 @@ RAG_EVENT_CORPUS = {
 }
 
 
+def _initialize_rag_runtime() -> None:
+    """Keep the current demo corpus as the default local RAG runtime."""
+    if settings.rag_use_demo_corpus:
+        build_index(RAG_EVENT_CORPUS)
+        return
+    # Future persistent-index initialization will live behind flags.
+    build_index(None)
+
+
 def main() -> None:
-    build_index(RAG_EVENT_CORPUS)
+    _initialize_rag_runtime()
 
     g = graph.build_graph()
     state = {

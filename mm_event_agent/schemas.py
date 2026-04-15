@@ -139,6 +139,48 @@ class LayeredSimilarEvents(TypedDict):
     bridge_examples: list[BridgeExample]
 
 
+class RagRetrievalMetadata(TypedDict):
+    score: float
+    rank: int
+    index_name: str
+
+
+class RagDocumentMeta(TypedDict, total=False):
+    doc_id: str
+    source_dataset: str
+    modality: str
+    event_type: str
+    index_name: str
+    shard_id: str
+    row: int
+    source_path: str
+    retrieval_text: str
+
+
+class RagIndexBuildInfo(TypedDict, total=False):
+    index_name: str
+    index_type: str
+    encoder_name: str
+    vector_dim: int
+    normalized: bool
+    doc_count: int
+    built_at: str
+    index_path: str
+    meta_path: str
+    source_path: str
+
+
+class RagQuery(TypedDict, total=False):
+    raw_text: str
+    image_desc: str
+    event_type: str
+    top_k: int
+    text_top_k: int
+    image_top_k: int
+    bridge_top_k: int
+    enable_image_query: bool
+
+
 class VerificationDiagnostic(TypedDict):
     field_path: str
     issue_type: str
@@ -187,6 +229,23 @@ def empty_layered_similar_events() -> LayeredSimilarEvents:
         "image_semantic_examples": [],
         "bridge_examples": [],
     }
+
+
+def attach_retrieval_metadata(
+    item: dict[str, Any],
+    *,
+    score: float,
+    rank: int,
+    index_name: str,
+) -> dict[str, Any]:
+    """Attach retrieval metadata without mutating the caller's input object."""
+    enriched = dict(item)
+    enriched["retrieval_metadata"] = {
+        "score": float(score),
+        "rank": int(rank),
+        "index_name": str(index_name or "").strip(),
+    }
+    return enriched
 
 
 def extract_json_object(text: str) -> dict[str, Any] | None:

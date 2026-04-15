@@ -65,6 +65,23 @@ class Settings:
     florence2_local_endpoint: str
     florence2_local_timeout_seconds: float
 
+    rag_use_persistent_index: bool
+    rag_use_demo_corpus: bool
+    rag_index_root: str
+    rag_text_encoder_model: str
+    rag_text_encoder_model_path: str
+    rag_image_encoder_model_path: str
+    rag_image_encoder_device: str
+    rag_ace_text_index_dir: str
+    rag_maven_text_index_dir: str
+    rag_swig_text_index_dir: str
+    rag_bridge_index_dir: str
+    rag_default_top_k: int
+    rag_text_top_k: int
+    rag_image_top_k: int
+    rag_bridge_top_k: int
+    rag_enable_image_query: bool
+
 
 def load_settings() -> Settings:
     return Settings(
@@ -86,6 +103,22 @@ def load_settings() -> Settings:
         florence2_device=_env_str("FLORENCE2_DEVICE", ""),
         florence2_local_endpoint=_env_str("FLORENCE2_LOCAL_ENDPOINT", ""),
         florence2_local_timeout_seconds=_env_float("FLORENCE2_LOCAL_TIMEOUT_SECONDS", 10.0),
+        rag_use_persistent_index=_env_flag("MM_EVENT_RAG_USE_PERSISTENT_INDEX", False),
+        rag_use_demo_corpus=_env_flag("MM_EVENT_RAG_USE_DEMO_CORPUS", True),
+        rag_index_root=_env_str("MM_EVENT_RAG_INDEX_ROOT", "data/rag/indexes") or "data/rag/indexes",
+        rag_text_encoder_model=_env_str("MM_EVENT_RAG_TEXT_ENCODER_MODEL", "sentence-transformers/all-MiniLM-L6-v2") or "sentence-transformers/all-MiniLM-L6-v2",
+        rag_text_encoder_model_path=_env_str("MM_EVENT_RAG_TEXT_ENCODER_MODEL_PATH", ""),
+        rag_image_encoder_model_path=_env_str("MM_EVENT_RAG_IMAGE_ENCODER_MODEL_PATH", ""),
+        rag_image_encoder_device=_env_str("MM_EVENT_RAG_IMAGE_ENCODER_DEVICE", ""),
+        rag_ace_text_index_dir=_env_str("MM_EVENT_RAG_ACE_TEXT_INDEX_DIR", ""),
+        rag_maven_text_index_dir=_env_str("MM_EVENT_RAG_MAVEN_TEXT_INDEX_DIR", ""),
+        rag_swig_text_index_dir=_env_str("MM_EVENT_RAG_SWIG_TEXT_INDEX_DIR", ""),
+        rag_bridge_index_dir=_env_str("MM_EVENT_RAG_BRIDGE_INDEX_DIR", ""),
+        rag_default_top_k=max(1, _env_int("MM_EVENT_RAG_DEFAULT_TOP_K", 3)),
+        rag_text_top_k=max(1, _env_int("MM_EVENT_RAG_TEXT_TOP_K", 3)),
+        rag_image_top_k=max(1, _env_int("MM_EVENT_RAG_IMAGE_TOP_K", 3)),
+        rag_bridge_top_k=max(1, _env_int("MM_EVENT_RAG_BRIDGE_TOP_K", 3)),
+        rag_enable_image_query=_env_flag("MM_EVENT_RAG_ENABLE_IMAGE_QUERY", True),
     )
 
 

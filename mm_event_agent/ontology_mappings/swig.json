@@ -1,0 +1,117 @@
+{
+  "dataset": "swig",
+  "canonical_ontology_module": "mm_event_agent.ontology",
+  "event_type_map": {
+    "transporting": "Movement:Transport",
+    "driving": "Movement:Transport",
+    "riding": "Movement:Transport",
+    "carrying": "Movement:Transport",
+    "carting": "Movement:Transport",
+    "loading": "Movement:Transport",
+    "pushing": "Movement:Transport",
+    "dragging": "Movement:Transport",
+    "lifting": "Movement:Transport",
+    "hoisting": "Movement:Transport",
+    "pulling": "Movement:Transport",
+    "attacking": "Conflict:Attack",
+    "shooting": "Conflict:Attack",
+    "demonstrating": "Conflict:Demonstrate",
+    "protesting": "Conflict:Demonstrate",
+    "marching": "Conflict:Demonstrate",
+    "parading": "Conflict:Demonstrate",
+    "arresting": "Justice:Arrest-Jail",
+    "jailing": "Justice:Arrest-Jail",
+    "detaining": "Justice:Arrest-Jail",
+    "handcuffing": "Justice:Arrest-Jail",
+    "meeting": "Contact:Meet",
+    "telephoning": "Contact:Phone-Write",
+    "phoning": "Contact:Phone-Write",
+    "dialing": "Contact:Phone-Write",
+    "calling": "Contact:Phone-Write",
+    "writing": "Contact:Phone-Write",
+    "dying": "Life:Die",
+    "killing": "Life:Die",
+    "paying": "Transaction:Transfer-Money",
+    "donating": "Transaction:Transfer-Money"
+  },
+  "role_map": {
+    "Movement:Transport": {
+      "agent": "Agent",
+      "person": "Artifact",
+      "passenger": "Artifact",
+      "artifact": "Artifact",
+      "item": "Artifact",
+      "vehicle": "Vehicle",
+      "destination": "Destination",
+      "place": "Destination",
+      "origin": "Origin",
+      "source": "Origin"
+    },
+    "Conflict:Attack": {
+      "agent": "Attacker",
+      "attacker": "Attacker",
+      "target": "Target",
+      "victim": "Target",
+      "firearm": "Instrument",
+      "projectile": "Instrument",
+      "weapon": "Instrument",
+      "instrument": "Instrument",
+      "place": "Place"
+    },
+    "Conflict:Demonstrate": {
+      "agent": "Entity",
+      "protester": "Entity",
+      "entity": "Entity",
+      "police": "Police",
+      "officer": "Police",
+      "sign": "Instrument",
+      "banner": "Instrument",
+      "instrument": "Instrument",
+      "place": "Place"
+    },
+    "Justice:Arrest-Jail": {
+      "agent": "Agent",
+      "officer": "Agent",
+      "police": "Agent",
+      "victim": "Person",
+      "person": "Person",
+      "detainee": "Person",
+      "suspect": "Person",
+      "handcuffs": "Instrument",
+      "vehicle": "Instrument",
+      "place": "Place"
+    },
+    "Contact:Phone-Write": {
+      "agent": "Entity",
+      "entity": "Entity",
+      "tool": "Instrument",
+      "phone": "Instrument",
+      "device": "Instrument",
+      "message": "Instrument",
+      "instrument": "Instrument",
+      "place": "Place"
+    },
+    "Contact:Meet": {
+      "agent": "Participant",
+      "participant": "Participant",
+      "person": "Participant",
+      "place": "Place"
+    },
+    "Life:Die": {
+      "victim": "Victim",
+      "person": "Victim",
+      "agent": "Agent",
+      "killer": "Agent",
+      "weapon": "Instrument",
+      "instrument": "Instrument",
+      "place": "Place"
+    },
+    "Transaction:Transfer-Money": {
+      "giver": "Giver",
+      "agent": "Giver",
+      "recipient": "Recipient",
+      "money": "Money",
+      "cash": "Money"
+    }
+  }
+}

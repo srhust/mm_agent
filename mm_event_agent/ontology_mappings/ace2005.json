@@ -1,0 +1,75 @@
+{
+  "dataset": "ace2005",
+  "canonical_ontology_module": "mm_event_agent.ontology",
+  "event_type_map": {
+    "Movement:Transport": "Movement:Transport",
+    "transport": "Movement:Transport",
+    "Conflict:Attack": "Conflict:Attack",
+    "attack": "Conflict:Attack",
+    "Conflict:Demonstrate": "Conflict:Demonstrate",
+    "demonstrate": "Conflict:Demonstrate",
+    "Justice:Arrest-Jail": "Justice:Arrest-Jail",
+    "arrest jail": "Justice:Arrest-Jail",
+    "arrest_jail": "Justice:Arrest-Jail",
+    "Contact:Phone-Write": "Contact:Phone-Write",
+    "phone write": "Contact:Phone-Write",
+    "phone_write": "Contact:Phone-Write",
+    "Contact:Meet": "Contact:Meet",
+    "meet": "Contact:Meet",
+    "Life:Die": "Life:Die",
+    "die": "Life:Die",
+    "Transaction:Transfer-Money": "Transaction:Transfer-Money"
+    ,"transfer money": "Transaction:Transfer-Money"
+    ,"transfer_money": "Transaction:Transfer-Money"
+  },
+  "role_map": {
+    "Movement:Transport": {
+      "agent": "Agent",
+      "artifact": "Artifact",
+      "vehicle": "Vehicle",
+      "destination": "Destination",
+      "origin": "Origin"
+    },
+    "Conflict:Attack": {
+      "attacker": "Attacker",
+      "target": "Target",
+      "victim": "Target",
+      "instrument": "Instrument",
+      "place": "Place"
+    },
+    "Conflict:Demonstrate": {
+      "entity": "Entity",
+      "police": "Police",
+      "instrument": "Instrument",
+      "place": "Place"
+    },
+    "Justice:Arrest-Jail": {
+      "agent": "Agent",
+      "person": "Person",
+      "instrument": "Instrument",
+      "place": "Place"
+    },
+    "Contact:Phone-Write": {
+      "entity": "Entity",
+      "instrument": "Instrument",
+      "place": "Place"
+    },
+    "Contact:Meet": {
+      "entity": "Participant",
+      "participant": "Participant",
+      "place": "Place"
+    },
+    "Life:Die": {
+      "victim": "Victim",
+      "person": "Victim",
+      "agent": "Agent",
+      "instrument": "Instrument",
+      "place": "Place"
+    },
+    "Transaction:Transfer-Money": {
+      "giver": "Giver",
+      "recipient": "Recipient",
+      "money": "Money"
+    }
+  }
+}

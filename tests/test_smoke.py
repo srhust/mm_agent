@@ -29,6 +29,7 @@ from mm_event_agent.ontology import (
 )
 from mm_event_agent.search.tavily_client import TavilySearchClient
 from mm_event_agent.schemas import (
+    attach_retrieval_metadata,
     ValidationError,
     attach_text_spans,
     build_grounding_requests,
@@ -90,6 +91,55 @@ def make_state() -> dict:
 
 
 class SmokeTests(unittest.TestCase):
+    def test_load_settings_exposes_future_rag_flags_without_changing_defaults(self) -> None:
+        with patch.dict(
+            os.environ,
+            {},
+            clear=True,
+        ):
+            loaded = runtime_config.load_settings()
+
+        self.assertFalse(loaded.rag_use_persistent_index)
+        self.assertTrue(loaded.rag_use_demo_corpus)
+        self.assertEqual(loaded.rag_index_root, "data/rag/indexes")
+        self.assertEqual(loaded.rag_text_encoder_model, "sentence-transformers/all-MiniLM-L6-v2")
+        self.assertEqual(loaded.rag_image_encoder_model_path, "")
+        self.assertEqual(loaded.rag_image_encoder_device, "")
+        self.assertEqual(loaded.rag_default_top_k, 3)
+        self.assertEqual(loaded.rag_text_top_k, 3)
+        self.assertEqual(loaded.rag_image_top_k, 3)
+        self.assertEqual(loaded.rag_bridge_top_k, 3)
+        self.assertTrue(loaded.rag_enable_image_query)
+
+    def test_attach_retrieval_metadata_returns_copy_and_preserves_existing_fields(self) -> None:
+        original = {
+            "id": "ace_000123",
+            "event_type": "Conflict:Attack",
+            "retrieval_text": "Conflict:Attack exploded market",
+        }
+
+        enriched = attach_retrieval_metadata(
+            original,
+            score=0.87,
+            rank=1,
+            index_name="text_event_examples",
+        )
+
+        self.assertEqual(original, {
+            "id": "ace_000123",
+            "event_type": "Conflict:Attack",
+            "retrieval_text": "Conflict:Attack exploded market",
+        })
+        self.assertEqual(enriched["id"], "ace_000123")
+        self.assertEqual(
+            enriched["retrieval_metadata"],
+            {
+                "score": 0.87,
+                "rank": 1,
+                "index_name": "text_event_examples",
+            },
+        )
+
     def test_graph_execution_smoke(self) -> None:
         state = make_state()
         state["perception_summary"] = ""

@@ -1,0 +1,81 @@
+{
+  "dataset": "maven_arg",
+  "canonical_ontology_module": "mm_event_agent.ontology",
+  "event_type_map": {
+    "Movement:Transport": "Movement:Transport",
+    "Motion": "Movement:Transport",
+    "Arriving": "Movement:Transport",
+    "Conflict:Attack": "Conflict:Attack",
+    "Attack": "Conflict:Attack",
+    "Conflict:Demonstrate": "Conflict:Demonstrate",
+    "Protest": "Conflict:Demonstrate",
+    "Justice:Arrest-Jail": "Justice:Arrest-Jail",
+    "Arrest": "Justice:Arrest-Jail",
+    "Contact:Phone-Write": "Contact:Phone-Write",
+    "Writing": "Contact:Phone-Write",
+    "Contact:Meet": "Contact:Meet",
+    "Life:Die": "Life:Die",
+    "Killing": "Life:Die",
+    "Death": "Life:Die",
+    "Transaction:Transfer-Money": "Transaction:Transfer-Money"
+  },
+  "role_map": {
+    "Movement:Transport": {
+      "agent": "Agent",
+      "patient": "Artifact",
+      "artifact": "Artifact",
+      "vehicle": "Vehicle",
+      "location_final": "Destination",
+      "destination": "Destination",
+      "location_original": "Origin",
+      "origin": "Origin"
+    },
+    "Conflict:Attack": {
+      "attacker": "Attacker",
+      "agent": "Attacker",
+      "patient": "Target",
+      "target": "Target",
+      "instrument": "Instrument",
+      "location": "Place",
+      "place": "Place"
+    },
+    "Conflict:Demonstrate": {
+      "agent": "Entity",
+      "entity": "Entity",
+      "police": "Police",
+      "instrument": "Instrument",
+      "location": "Place",
+      "place": "Place"
+    },
+    "Justice:Arrest-Jail": {
+      "agent": "Agent",
+      "patient": "Person",
+      "person": "Person",
+      "instrument": "Instrument",
+      "location": "Place",
+      "place": "Place"
+    },
+    "Contact:Phone-Write": {
+      "entity": "Entity",
+      "instrument": "Instrument",
+      "place": "Place"
+    },
+    "Contact:Meet": {
+      "participant": "Participant",
+      "place": "Place"
+    },
+    "Life:Die": {
+      "victim": "Victim",
+      "killer": "Agent",
+      "agent": "Agent",
+      "instrument": "Instrument",
+      "location": "Place",
+      "place": "Place"
+    },
+    "Transaction:Transfer-Money": {
+      "giver": "Giver",
+      "recipient": "Recipient",
+      "money": "Money"
+    }
+  }
+}
