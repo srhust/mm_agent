@@ -75,6 +75,7 @@ class Settings:
     rag_qwen_embedding_dtype: str
     rag_qwen_embedding_attn_impl: str
     rag_qwen_text_instruction: str
+    rag_qwen_image_instruction: str
     rag_qwen_embedding_out_dim: int
     rag_qwen_embedding_normalize: bool
     rag_image_encoder_model_path: str
@@ -82,6 +83,7 @@ class Settings:
     rag_ace_text_index_dir: str
     rag_maven_text_index_dir: str
     rag_swig_text_index_dir: str
+    rag_swig_image_index_dir: str
     rag_bridge_index_dir: str
     rag_default_top_k: int
     rag_text_top_k: int
@@ -124,6 +126,11 @@ def load_settings() -> Settings:
             "Retrieve text relevant to the user's query.",
         )
         or "Retrieve text relevant to the user's query.",
+        rag_qwen_image_instruction=_env_str(
+            "MM_EVENT_RAG_QWEN_IMAGE_INSTRUCTION",
+            "Retrieve images relevant to the user's query.",
+        )
+        or "Retrieve images relevant to the user's query.",
         rag_qwen_embedding_out_dim=max(0, _env_int("MM_EVENT_RAG_QWEN_EMBEDDING_OUT_DIM", 0)),
         rag_qwen_embedding_normalize=_env_flag("MM_EVENT_RAG_QWEN_EMBEDDING_NORMALIZE", True),
         rag_image_encoder_model_path=_env_str("MM_EVENT_RAG_IMAGE_ENCODER_MODEL_PATH", ""),
@@ -131,6 +138,7 @@ def load_settings() -> Settings:
         rag_ace_text_index_dir=_env_str("MM_EVENT_RAG_ACE_TEXT_INDEX_DIR", ""),
         rag_maven_text_index_dir=_env_str("MM_EVENT_RAG_MAVEN_TEXT_INDEX_DIR", ""),
         rag_swig_text_index_dir=_env_str("MM_EVENT_RAG_SWIG_TEXT_INDEX_DIR", ""),
+        rag_swig_image_index_dir=_env_str("MM_EVENT_RAG_SWIG_IMAGE_INDEX_DIR", ""),
         rag_bridge_index_dir=_env_str("MM_EVENT_RAG_BRIDGE_INDEX_DIR", ""),
         rag_default_top_k=max(1, _env_int("MM_EVENT_RAG_DEFAULT_TOP_K", 3)),
         rag_text_top_k=max(1, _env_int("MM_EVENT_RAG_TEXT_TOP_K", 3)),

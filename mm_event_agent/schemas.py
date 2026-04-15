@@ -147,6 +147,8 @@ class RagRetrievalMetadata(TypedDict):
 
 class RagDocumentMeta(TypedDict, total=False):
     doc_id: str
+    image_id: str
+    path: str
     source_dataset: str
     modality: str
     event_type: str
@@ -164,6 +166,7 @@ class RagIndexBuildInfo(TypedDict, total=False):
     encoder_name: str
     encoder_name_or_path: str
     instruction: str
+    batch_size: int
     vector_dim: int
     normalized: bool
     doc_count: int

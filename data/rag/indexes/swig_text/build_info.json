@@ -1,0 +1,16 @@
+{
+  "index_name": "swig_text",
+  "encoder_type": "qwen3_vl_embedding",
+  "encoder_name_or_path": "/home/DATA4/hwx/Qwen3-VL-embedding",
+  "instruction": "Retrieve text relevant to the user's query.",
+  "normalized": true,
+  "index_type": "IndexFlatIP",
+  "built_at": "2026-04-15T15:02:44.693893+00:00",
+  "source_path": "/home/hyx/mm_agent/data/rag/normalized/swig.train_dev.text.jsonl",
+  "skip_reasons": {},
+  "batch_size": 8,
+  "max_length": 256,
+  "encoder_name": "/home/DATA4/hwx/Qwen3-VL-embedding",
+  "vector_dim": 4096,
+  "record_count": 5619
+}

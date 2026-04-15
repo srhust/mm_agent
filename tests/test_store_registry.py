@@ -21,6 +21,11 @@ class FakeEncoder:
         return np.asarray([[1.0, 0.0] for _ in texts], dtype=np.float32)
 
 
+class FakeImageEncoder:
+    def encode_image_paths(self, image_paths, batch_size: int = 8):
+        return np.asarray([[1.0, 0.0] for _ in image_paths], dtype=np.float32)
+
+
 @unittest.skipUnless(PersistentFaissIndex is not None and RagStoreRegistry is not None, "faiss is not installed in this environment")
 class RagStoreRegistryTests(unittest.TestCase):
     def test_registry_retrieves_text_examples_and_attaches_metadata(self) -> None:
@@ -58,6 +63,47 @@ class RagStoreRegistryTests(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertEqual(results[0]["id"], "ace-1")
             self.assertEqual(results[0]["retrieval_metadata"]["index_name"], "ace_text")
+            self.assertEqual(results[0]["retrieval_metadata"]["rank"], 1)
+
+    def test_registry_retrieves_swig_image_examples(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            swig_image_dir = root / "swig_image"
+            index = PersistentFaissIndex(IndexArtifactPaths.from_root(swig_image_dir), index_name="swig_image")
+            index.build_from_embeddings(
+                np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+                [
+                    {
+                        "id": "swig-image::1",
+                        "image_id": "1",
+                        "source_dataset": "SWiG",
+                        "event_type": "Conflict:Attack",
+                        "path": "a.jpg",
+                    },
+                    {
+                        "id": "swig-image::2",
+                        "image_id": "2",
+                        "source_dataset": "SWiG",
+                        "event_type": "Life:Die",
+                        "path": "b.jpg",
+                    },
+                ],
+                encoder_name_or_path="local-model",
+                normalized=True,
+                build_info={"encoder_type": "qwen3_vl_embedding"},
+            )
+            index.save()
+
+            registry = RagStoreRegistry(
+                encoder=FakeEncoder(),
+                image_encoder=FakeImageEncoder(),
+                index_root=root,
+            )
+            results = registry.retrieve_swig_image_examples(image_path="query.jpg", top_k=2, event_type="Conflict:Attack")
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["id"], "swig-image::1")
+            self.assertEqual(results[0]["retrieval_metadata"]["index_name"], "swig_image")
             self.assertEqual(results[0]["retrieval_metadata"]["rank"], 1)
 
 
