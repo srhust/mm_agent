@@ -1,0 +1,27 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test and type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editor/IDE settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local environment files
+.env
+
+# Keep real data tracked, but ignore temporary local builder outputs
+data/rag/normalized/_tmp*.jsonl
