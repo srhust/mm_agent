@@ -184,6 +184,54 @@ class LayeredRagRuntimeTests(unittest.TestCase):
         self.assertEqual(kwargs["top_k"], 7)
         self.assertEqual(kwargs["raw_image"], "C:/tmp/query.jpg")
 
+    def test_local_rag_node_accepts_flat_schema(self) -> None:
+        state = {
+            "raw_text": "Flat schema query",
+            "event_type": "Conflict:Attack",
+            "image_desc": "",
+            "raw_image": None,
+        }
+
+        with patch.object(rag_node_module, "_retrieve_similar_events", return_value=empty_layered_similar_events()) as mock_retrieve:
+            rag_node(state)
+
+        _, kwargs = mock_retrieve.call_args
+        self.assertEqual(kwargs["raw_text"], "Flat schema query")
+        self.assertEqual(kwargs["event_type"], "Conflict:Attack")
+
+    def test_local_rag_node_prefers_nested_and_text_keys_in_mixed_schema(self) -> None:
+        state = {
+            "text": "Nested text wins",
+            "raw_text": "Flat text fallback",
+            "event": {"event_type": "Conflict:Attack"},
+            "event_type": "Life:Die",
+            "image_desc": "scene",
+            "raw_image": None,
+        }
+
+        with patch.object(rag_node_module, "_retrieve_similar_events", return_value=empty_layered_similar_events()) as mock_retrieve:
+            rag_node(state)
+
+        _, kwargs = mock_retrieve.call_args
+        self.assertEqual(kwargs["raw_text"], "Nested text wins")
+        self.assertEqual(kwargs["event_type"], "Conflict:Attack")
+
+    def test_local_rag_node_does_not_short_circuit_on_raw_image_only(self) -> None:
+        state = {
+            "text": "",
+            "raw_text": "",
+            "event": {},
+            "event_type": "",
+            "image_desc": "",
+            "raw_image": "C:/tmp/query.jpg",
+        }
+
+        with patch.object(rag_node_module, "_retrieve_similar_events", return_value=empty_layered_similar_events()) as mock_retrieve:
+            result = rag_node(state)
+
+        self.assertEqual(result, {"similar_events": empty_layered_similar_events()})
+        self.assertTrue(mock_retrieve.called)
+
 
 if __name__ == "__main__":
     unittest.main()

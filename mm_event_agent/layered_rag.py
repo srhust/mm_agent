@@ -231,9 +231,9 @@ class LayeredRagStore:
             if self._persistent_registry_factory is not None:
                 self._persistent_registry = self._persistent_registry_factory()
             else:
-                from mm_event_agent.rag.store_registry import RagStoreRegistry
+                from mm_event_agent.rag.store_registry import get_cached_registry
 
-                self._persistent_registry = RagStoreRegistry()
+                self._persistent_registry = get_cached_registry()
         except Exception:
             self._persistent_registry = None
         return self._persistent_registry

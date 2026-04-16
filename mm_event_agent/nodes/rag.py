@@ -32,11 +32,17 @@ def _retrieve_similar_events(
 def rag(state: Mapping[str, Any]) -> dict[str, Any]:
     """Read only data field text and write only data field similar_events."""
     started_at = time.perf_counter()
-    raw_text = str(state.get("text") or "").strip()
+    raw_text = str(state.get("text") or state.get("raw_text") or "").strip()
     raw_image = state.get("raw_image")
     image_desc = str(state.get("image_desc") or "").strip()
-    event_type = str(state.get("event", {}).get("event_type") or "").strip() if isinstance(state.get("event"), dict) else ""
-    if not raw_text and not image_desc and not event_type:
+    event_type = (
+        str(state.get("event", {}).get("event_type") or "").strip()
+        if isinstance(state.get("event"), dict)
+        else ""
+    )
+    if not event_type:
+        event_type = str(state.get("event_type") or "").strip()
+    if not raw_text and not image_desc and not event_type and raw_image is None:
         result = {"similar_events": empty_layered_similar_events()}
         log_node_event("local_rag", state, started_at, True, patterns=0, text_examples=0, image_examples=0, bridge_examples=0)
         return result
