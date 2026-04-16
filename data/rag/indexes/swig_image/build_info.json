@@ -1,0 +1,13 @@
+{
+  "index_name": "swig_image",
+  "encoder_type": "qwen3_vl_embedding",
+  "encoder_name_or_path": "/home/DATA4/hwx/Qwen3-VL-embedding",
+  "instruction": "Retrieve images relevant to the user's query.",
+  "normalized": true,
+  "index_type": "IndexFlatIP",
+  "built_at": "2026-04-15T16:10:45.061248+00:00",
+  "batch_size": 8,
+  "encoder_name": "/home/DATA4/hwx/Qwen3-VL-embedding",
+  "vector_dim": 4096,
+  "record_count": 1200
+}
