@@ -1,4 +1,4 @@
-"""Florence-2 grounding executor via Hugging Face transformers.
+"""Florence-2 grounding executor with preferred local-service integration.
 
 raw_image is the primary image input carried in state and is the source image
 used here for spatial grounding.
@@ -13,9 +13,13 @@ or force bbox write-back yet.
 from __future__ import annotations
 
 import io
+import json
+import logging
 import os
 from copy import deepcopy
+import re
 from typing import Any
+from urllib import request as urllib_request
 
 from mm_event_agent.runtime_config import settings
 from mm_event_agent.schemas import GroundingRequest, GroundingResult
@@ -23,6 +27,7 @@ from mm_event_agent.schemas import GroundingRequest, GroundingResult
 
 DEFAULT_FLORENCE2_MODEL_ID = settings.florence2_model_id
 DEFAULT_FLORENCE2_TASK = settings.florence2_task
+logger = logging.getLogger("mm_event_agent")
 
 
 def _failed_grounding_result(request: GroundingRequest, status: str = "failed") -> GroundingResult:
@@ -54,6 +59,146 @@ def _normalize_score(raw_score: Any) -> float | None:
         return float(raw_score)
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_grounding_status(raw_status: Any, bbox: list[float] | None) -> str:
+    status = str(raw_status or "").strip().lower()
+    if status in {"grounded", "failed", "unresolved"}:
+        return status
+    return "grounded" if bbox is not None else "failed"
+
+
+def _normalize_service_image_ref(raw_image: Any) -> str | None:
+    """Normalize raw_image into a service-safe string reference."""
+    if not isinstance(raw_image, str):
+        return None
+    candidate = raw_image.strip()
+    if not candidate:
+        return None
+    if candidate.startswith(("http://", "https://", "data:")):
+        return candidate
+    if os.path.exists(candidate):
+        return os.path.abspath(candidate)
+    return candidate
+
+
+def build_grounding_service_payload(
+    raw_image: Any,
+    grounding_requests: list[GroundingRequest],
+    *,
+    task: str,
+) -> dict[str, Any] | None:
+    image_ref = _normalize_service_image_ref(raw_image)
+    if image_ref is None:
+        return None
+    normalized_requests = [
+        {
+            "role": str(request.get("role") or ""),
+            "label": str(request.get("label") or ""),
+            "grounding_query": str(request.get("grounding_query") or ""),
+        }
+        for request in grounding_requests
+    ]
+    return {
+        "raw_image": image_ref,
+        "grounding_requests": normalized_requests,
+        "task": str(task or DEFAULT_FLORENCE2_TASK),
+    }
+
+
+def _normalize_service_result(
+    request: GroundingRequest,
+    raw_result: Any,
+) -> GroundingResult:
+    if not isinstance(raw_result, dict):
+        return _failed_grounding_result(request)
+
+    bbox = _normalize_bbox(raw_result.get("bbox"))
+    score = _normalize_score(raw_result.get("score"))
+    return {
+        "role": str(raw_result.get("role") or request.get("role") or ""),
+        "label": str(raw_result.get("label") or request.get("label") or ""),
+        "grounding_query": str(raw_result.get("grounding_query") or request.get("grounding_query") or ""),
+        "bbox": bbox,
+        "score": score,
+        "grounding_status": _normalize_grounding_status(raw_result.get("grounding_status"), bbox),
+    }
+
+
+def parse_grounding_service_response(
+    raw_response: Any,
+    grounding_requests: list[GroundingRequest],
+) -> list[GroundingResult]:
+    if not isinstance(raw_response, dict):
+        return [_failed_grounding_result(request) for request in grounding_requests]
+
+    raw_results = raw_response.get("results")
+    if not isinstance(raw_results, list):
+        return [_failed_grounding_result(request) for request in grounding_requests]
+
+    normalized: list[GroundingResult] = []
+    for index, request in enumerate(grounding_requests):
+        raw_result = raw_results[index] if index < len(raw_results) else None
+        normalized.append(_normalize_service_result(request, raw_result))
+    return normalized
+
+
+class Florence2ServiceGrounder:
+    """HTTP client for a separate local Florence-2 grounding service."""
+
+    def __init__(
+        self,
+        endpoint: str | None = None,
+        *,
+        task_prompt: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        self.endpoint = str(endpoint or settings.florence2_local_endpoint or "").strip()
+        self.task_prompt = task_prompt or settings.florence2_task
+        self.timeout_seconds = float(timeout_seconds or settings.florence2_local_timeout_seconds)
+
+    def execute(
+        self,
+        raw_image: Any,
+        grounding_requests: list[GroundingRequest],
+    ) -> list[GroundingResult]:
+        if not grounding_requests:
+            return []
+
+        payload = build_grounding_service_payload(
+            raw_image,
+            grounding_requests,
+            task=self.task_prompt,
+        )
+        if payload is None:
+            logger.warning(
+                "Florence grounding service payload could not be built for raw_image=%r",
+                type(raw_image).__name__,
+            )
+            return [_failed_grounding_result(request) for request in grounding_requests]
+
+        try:
+            raw_response = self._post_json(payload)
+        except Exception as exc:
+            logger.warning(
+                "Florence grounding service request failed endpoint=%s error=%s",
+                self.endpoint,
+                exc,
+            )
+            return [_failed_grounding_result(request) for request in grounding_requests]
+
+        return parse_grounding_service_response(raw_response, grounding_requests)
+
+    def _post_json(self, payload: dict[str, Any]) -> Any:
+        request = urllib_request.Request(
+            self.endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib_request.urlopen(request, timeout=self.timeout_seconds) as response:
+            body = response.read().decode("utf-8")
+        return json.loads(body)
 
 
 class Florence2HFGrounder:
@@ -113,13 +258,38 @@ class Florence2HFGrounder:
 
         self._torch = torch
         self._processor = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True)
-        self._model = AutoModelForCausalLM.from_pretrained(self.model_id, trust_remote_code=True)
+        self._model = AutoModelForCausalLM.from_pretrained(
+            self.model_id,
+            trust_remote_code=True,
+            torch_dtype=torch.float16,
+        )
         resolved_device = self.device
         if resolved_device is None:
             resolved_device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = resolved_device
         self._model.to(self.device)
         self._model.eval()
+
+    def _is_gpu_device(self) -> bool:
+        return isinstance(self.device, str) and self.device.lower().startswith("cuda")
+
+    def _prepare_inputs(self, inputs: dict[str, Any]) -> dict[str, Any]:
+        """Move Florence inputs to the configured device with validated dtypes."""
+        torch = self._torch
+        if torch is None:
+            raise RuntimeError("Florence-2 torch dependency is not loaded")
+
+        prepared: dict[str, Any] = {}
+        for key, value in inputs.items():
+            if not hasattr(value, "to"):
+                prepared[key] = value
+                continue
+
+            moved = value.to(self.device)
+            if key == "pixel_values" and self._is_gpu_device():
+                moved = moved.to(dtype=torch.float16)
+            prepared[key] = moved
+        return prepared
 
     def _load_image(self, raw_image: Any) -> Any | None:
         """Load raw_image into a PIL image if possible."""
@@ -156,20 +326,58 @@ class Florence2HFGrounder:
         query = str(request.get("grounding_query") or "").strip()
         return f"{self.task_prompt}{query}"
 
-    def _run_single_request(self, image: Any, request: GroundingRequest) -> GroundingResult:
-        """Run one Florence-2 query and normalize the output structure."""
+    def _build_candidate_queries(self, request: GroundingRequest) -> list[str]:
+        """Build deterministic phrase-grounding candidates.
+
+        The wrapper prefers the image-side label as the primary phrase query.
+        Optional fallback phrases can be carried in grounding_query using either:
+        - a plain phrase distinct from the label
+        - multiple phrases separated by `||` or `|`
+        - a legacy `Role: label` format, whose suffix is treated as a phrase
+        At most three unique candidates are returned: primary label plus up to
+        two fallback phrases.
+        """
+        label = str(request.get("label") or "").strip()
+        raw_query = str(request.get("grounding_query") or "").strip()
+
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def add_candidate(candidate: str) -> None:
+            normalized = " ".join(candidate.split())
+            if not normalized:
+                return
+            dedupe_key = normalized.casefold()
+            if dedupe_key in seen:
+                return
+            seen.add(dedupe_key)
+            candidates.append(normalized)
+
+        add_candidate(label)
+
+        if raw_query:
+            pieces = [piece.strip() for piece in re.split(r"\|\|?", raw_query) if piece.strip()]
+            if not pieces:
+                pieces = [raw_query]
+            for piece in pieces:
+                add_candidate(piece)
+                if ":" in piece:
+                    _, suffix = piece.split(":", 1)
+                    add_candidate(suffix.strip())
+
+        return candidates[:3]
+
+    def _run_phrase_query(self, image: Any, query: str) -> tuple[list[float] | None, float | None]:
         processor = self._processor
         model = self._model
-        torch = self._torch
-        if processor is None or model is None or torch is None:
+        if processor is None or model is None:
             raise RuntimeError("Florence-2 model is not loaded")
 
-        prompt = self._build_florence_query(request)
+        prompt = f"{self.task_prompt}{query}"
         inputs = processor(text=prompt, images=image, return_tensors="pt")
-        inputs = {key: value.to(self.device) if hasattr(value, "to") else value for key, value in inputs.items()}
+        inputs = self._prepare_inputs(inputs)
         generated_ids = model.generate(
-            input_ids=inputs.get("input_ids"),
-            pixel_values=inputs.get("pixel_values"),
+            **inputs,
             max_new_tokens=128,
             num_beams=1,
             do_sample=False,
@@ -180,17 +388,28 @@ class Florence2HFGrounder:
             task=self.task_prompt,
             image_size=(image.width, image.height),
         )
-        bbox, score = self._extract_best_grounding(parsed)
-        if bbox is None:
-            return _failed_grounding_result(request)
-        return {
-            "role": str(request.get("role") or ""),
-            "label": str(request.get("label") or ""),
-            "grounding_query": str(request.get("grounding_query") or ""),
-            "bbox": bbox,
-            "score": score,
-            "grounding_status": "grounded",
-        }
+        return self._extract_best_grounding(parsed)
+
+    def _run_single_request(self, image: Any, request: GroundingRequest) -> GroundingResult:
+        """Run one Florence-2 query and normalize the output structure."""
+        processor = self._processor
+        model = self._model
+        torch = self._torch
+        if processor is None or model is None or torch is None:
+            raise RuntimeError("Florence-2 model is not loaded")
+
+        for query in self._build_candidate_queries(request):
+            bbox, score = self._run_phrase_query(image, query)
+            if bbox is not None:
+                return {
+                    "role": str(request.get("role") or ""),
+                    "label": str(request.get("label") or ""),
+                    "grounding_query": str(request.get("grounding_query") or ""),
+                    "bbox": bbox,
+                    "score": score,
+                    "grounding_status": "grounded",
+                }
+        return _failed_grounding_result(request)
 
     def _extract_best_grounding(self, parsed: Any) -> tuple[list[float] | None, float | None]:
         """Extract the first usable bbox/score pair from Florence output."""
@@ -198,22 +417,33 @@ class Florence2HFGrounder:
             return None, None
 
         task_payload = parsed.get(self.task_prompt)
-        if isinstance(task_payload, dict):
-            bboxes = task_payload.get("bboxes") or task_payload.get("boxes") or []
-            scores = task_payload.get("scores") or []
-            if isinstance(bboxes, list) and bboxes:
-                bbox = _normalize_bbox(bboxes[0])
-                score = _normalize_score(scores[0]) if isinstance(scores, list) and scores else None
-                return bbox, score
+        bbox, score = self._extract_bbox_from_payload(task_payload)
+        if bbox is not None:
+            return bbox, score
 
         for value in parsed.values():
-            if isinstance(value, dict):
-                bboxes = value.get("bboxes") or value.get("boxes") or []
-                scores = value.get("scores") or []
-                if isinstance(bboxes, list) and bboxes:
-                    bbox = _normalize_bbox(bboxes[0])
-                    score = _normalize_score(scores[0]) if isinstance(scores, list) and scores else None
-                    return bbox, score
+            bbox, score = self._extract_bbox_from_payload(value)
+            if bbox is not None:
+                return bbox, score
+        return None, None
+
+    def _extract_bbox_from_payload(self, payload: Any) -> tuple[list[float] | None, float | None]:
+        if not isinstance(payload, dict):
+            return None, None
+
+        bboxes = payload.get("bboxes") or payload.get("boxes") or []
+        scores = payload.get("scores") or []
+        if not isinstance(bboxes, list):
+            return None, None
+
+        for index, candidate in enumerate(bboxes):
+            bbox = _normalize_bbox(candidate)
+            if bbox is None:
+                continue
+            score = None
+            if isinstance(scores, list) and index < len(scores):
+                score = _normalize_score(scores[index])
+            return bbox, score
         return None, None
 
 
@@ -223,7 +453,17 @@ def execute_grounding_requests(
     *,
     model_id: str | None = None,
 ) -> list[GroundingResult]:
-    """Convenience wrapper for one-off Florence-2 grounding execution."""
+    """Convenience wrapper for one-off Florence-2 grounding execution.
+
+    Preferred path:
+    - local Florence-2 service via FLORENCE2_LOCAL_ENDPOINT
+
+    Secondary fallback:
+    - in-process HF Florence loading when no local endpoint is configured
+    """
+    if str(settings.florence2_local_endpoint or "").strip():
+        return Florence2ServiceGrounder().execute(raw_image, grounding_requests)
+
     grounder = Florence2HFGrounder(model_id=model_id)
     return grounder.execute(raw_image, grounding_requests)
 

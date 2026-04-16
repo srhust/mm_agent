@@ -50,6 +50,12 @@ class Settings:
     openai_model: str
     openai_base_url: str
     openai_timeout_seconds: float
+    extraction_backend: str
+    extraction_model_name: str
+    extraction_api_base: str
+    extraction_api_key: str
+    extraction_timeout_seconds: float
+    extraction_stage_a_use_raw_image: bool
 
     tavily_api_key: str
     tavily_endpoint: str
@@ -64,6 +70,14 @@ class Settings:
 
     florence2_local_endpoint: str
     florence2_local_timeout_seconds: float
+    use_vlm_perception: bool
+    perception_backend: str
+    perception_model_name: str
+    perception_api_base: str
+    perception_api_key: str
+    perception_timeout_seconds: float
+    perception_instruction: str
+    perception_cache_enabled: bool
 
     rag_use_persistent_index: bool
     rag_use_demo_corpus: bool
@@ -105,6 +119,19 @@ def load_settings() -> Settings:
         openai_model=_env_str("OPENAI_MODEL", "gpt-4o-mini") or "gpt-4o-mini",
         openai_base_url=_env_str("OPENAI_BASE_URL", ""),
         openai_timeout_seconds=_env_float("OPENAI_TIMEOUT_SECONDS", 30.0),
+        extraction_backend=_env_str("MM_EVENT_EXTRACTION_BACKEND", "openai_compatible") or "openai_compatible",
+        extraction_model_name=_env_str(
+            "MM_EVENT_EXTRACTION_MODEL_NAME",
+            _env_str("OPENAI_MODEL", "gpt-4o-mini"),
+        )
+        or "gpt-4o-mini",
+        extraction_api_base=_env_str("MM_EVENT_EXTRACTION_API_BASE", _env_str("OPENAI_BASE_URL", "")),
+        extraction_api_key=_env_str("MM_EVENT_EXTRACTION_API_KEY", _env_str("OPENAI_API_KEY", "")),
+        extraction_timeout_seconds=_env_float(
+            "MM_EVENT_EXTRACTION_TIMEOUT_SECONDS",
+            _env_float("OPENAI_TIMEOUT_SECONDS", 30.0),
+        ),
+        extraction_stage_a_use_raw_image=_env_flag("MM_EVENT_EXTRACTION_STAGE_A_USE_RAW_IMAGE", False),
         tavily_api_key=_env_str("TAVILY_API_KEY", ""),
         tavily_endpoint=_env_str("MM_EVENT_TAVILY_ENDPOINT", "https://api.tavily.com/search") or "https://api.tavily.com/search",
         search_timeout_seconds=_env_float("MM_EVENT_SEARCH_TIMEOUT_SECONDS", 8.0),
@@ -112,10 +139,29 @@ def load_settings() -> Settings:
         search_top_k=max(1, _env_int("MM_EVENT_SEARCH_TOP_K", 3)),
         search_min_relevance=max(0.0, min(1.0, _env_float("MM_EVENT_SEARCH_MIN_RELEVANCE", 0.18))),
         florence2_model_id=_env_str("FLORENCE2_MODEL_ID", "microsoft/Florence-2-base-ft") or "microsoft/Florence-2-base-ft",
-        florence2_task=_env_str("FLORENCE2_TASK", "<OPEN_VOCABULARY_DETECTION>") or "<OPEN_VOCABULARY_DETECTION>",
+        florence2_task=_env_str("FLORENCE2_TASK", "<CAPTION_TO_PHRASE_GROUNDING>") or "<CAPTION_TO_PHRASE_GROUNDING>",
         florence2_device=_env_str("FLORENCE2_DEVICE", ""),
         florence2_local_endpoint=_env_str("FLORENCE2_LOCAL_ENDPOINT", ""),
         florence2_local_timeout_seconds=_env_float("FLORENCE2_LOCAL_TIMEOUT_SECONDS", 10.0),
+        use_vlm_perception=_env_flag("MM_EVENT_USE_VLM_PERCEPTION", False),
+        perception_backend=_env_str("MM_EVENT_PERCEPTION_BACKEND", "openai_compatible") or "openai_compatible",
+        perception_model_name=_env_str("MM_EVENT_PERCEPTION_MODEL_NAME", "qwen3.5-plus") or "qwen3.5-plus",
+        perception_api_base=_env_str("MM_EVENT_PERCEPTION_API_BASE", _env_str("OPENAI_BASE_URL", "")),
+        perception_api_key=_env_str("MM_EVENT_PERCEPTION_API_KEY", _env_str("OPENAI_API_KEY", "")),
+        perception_timeout_seconds=_env_float(
+            "MM_EVENT_PERCEPTION_TIMEOUT_SECONDS",
+            _env_float("OPENAI_TIMEOUT_SECONDS", 30.0),
+        ),
+        perception_instruction=_env_str(
+            "MM_EVENT_PERCEPTION_INSTRUCTION",
+            (
+                "You are a multimodal perception stage. Analyze the image and optional text context. "
+                'Return strict JSON with keys "image_desc" and "perception_summary". '
+                '"image_desc" must be a concise factual image description. '
+                '"perception_summary" must be a short multimodal summary suitable for downstream event extraction.'
+            ),
+        ),
+        perception_cache_enabled=_env_flag("MM_EVENT_PERCEPTION_CACHE_ENABLED", True),
         rag_use_persistent_index=_env_flag("MM_EVENT_RAG_USE_PERSISTENT_INDEX", False),
         rag_use_demo_corpus=_env_flag("MM_EVENT_RAG_USE_DEMO_CORPUS", True),
         rag_index_root=_env_str("MM_EVENT_RAG_INDEX_ROOT", "data/rag/indexes") or "data/rag/indexes",

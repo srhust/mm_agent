@@ -200,6 +200,7 @@ class FusionContext(TypedDict):
     # not the original raw image object itself.
     raw_image_desc: str
     perception_summary: str
+    text_tokens: list[str]
     patterns: LayeredSimilarEvents
     evidence: list[EvidenceItem]
 
@@ -225,6 +226,7 @@ def empty_fusion_context() -> FusionContext:
         "raw_text": "",
         "raw_image_desc": "",
         "perception_summary": "",
+        "text_tokens": [],
         "patterns": empty_layered_similar_events(),
         "evidence": [],
     }
@@ -253,6 +255,21 @@ def attach_retrieval_metadata(
         "index_name": str(index_name or "").strip(),
     }
     return enriched
+
+
+_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?|[^\w\s]", re.UNICODE)
+
+
+def tokenize_text(text: str) -> list[str]:
+    return _TOKEN_PATTERN.findall(str(text or ""))
+
+
+def resolve_text_token_sequence(raw_text: str, token_sequence: Any = None) -> list[str]:
+    if isinstance(token_sequence, list):
+        normalized = [str(item) for item in token_sequence if str(item)]
+        if normalized:
+            return normalized
+    return tokenize_text(raw_text)
 
 
 def extract_json_object(text: str) -> dict[str, Any] | None:
@@ -318,45 +335,117 @@ def parse_event_json(text: str) -> Event:
     return validate_event(data)
 
 
-def enforce_strict_text_grounding(event: Event, raw_text: str) -> Event:
-    anchor_spans: list[TextSpan] = []
+def _is_matching_span(span: TextSpan | None, source_tokens: list[str], value: str) -> bool:
+    if not isinstance(span, dict):
+        return False
+    start = span.get("start")
+    end = span.get("end")
+    if not isinstance(start, int) or not isinstance(end, int):
+        return False
+    if start < 0 or end < start or end > len(source_tokens):
+        return False
+    return source_tokens[start:end] == tokenize_text(value)
+
+
+def _unique_exact_span(source_tokens: list[str], value: str) -> TextSpan | None:
+    occurrences = find_all_text_occurrences(source_tokens, value)
+    if len(occurrences) == 1:
+        return occurrences[0]
+    return None
+
+
+def align_text_grounded_event(
+    event: Event,
+    raw_text: str,
+    token_sequence: Any = None,
+) -> tuple[Event, list[str], list[VerificationDiagnostic]]:
+    issues: list[str] = []
+    diagnostics: list[VerificationDiagnostic] = []
+    source_tokens = resolve_text_token_sequence(raw_text, token_sequence)
+
     trigger = event["trigger"]
+    aligned_trigger: Trigger | None = None
     if trigger is not None:
-        trigger_span = find_text_span(raw_text, trigger["text"], anchor_spans=anchor_spans)
-        if trigger_span is not None:
-            trigger = {
-                "text": trigger["text"],
+        trigger_text = str(trigger.get("text") or "")
+        trigger_span = trigger.get("span") if isinstance(trigger.get("span"), dict) else None
+        if _is_matching_span(trigger_span, source_tokens, trigger_text):
+            aligned_trigger = {
+                "text": trigger_text,
                 "modality": "text",
                 "span": trigger_span,
             }
-            anchor_spans.append(trigger_span)
         else:
-            trigger = None
+            realigned = _unique_exact_span(source_tokens, trigger_text)
+            if realigned is not None:
+                aligned_trigger = {
+                    "text": trigger_text,
+                    "modality": "text",
+                    "span": realigned,
+                }
+            else:
+                issue_type = "span_mismatch" if trigger_span is not None else "missing_span_alignment"
+                issues.append("trigger dropped during strict text alignment")
+                diagnostics.append(
+                    {
+                        "field_path": "trigger.span",
+                        "issue_type": issue_type,
+                        "suggested_action": "realign_or_drop",
+                    }
+                )
 
-    text_arguments: list[TextArgument] = []
-    for item in event["text_arguments"]:
-        span = find_text_span(raw_text, item["text"], anchor_spans=anchor_spans)
-        if span is not None:
-            text_arguments.append(
+    aligned_text_arguments: list[TextArgument] = []
+    for index, item in enumerate(event["text_arguments"]):
+        text = str(item.get("text") or "")
+        span = item.get("span") if isinstance(item.get("span"), dict) else None
+        if _is_matching_span(span, source_tokens, text):
+            aligned_text_arguments.append(
                 {
                     "role": item["role"],
-                    "text": item["text"],
+                    "text": text,
                     "span": span,
                 }
             )
-            anchor_spans.append(span)
+            continue
+        realigned = _unique_exact_span(source_tokens, text)
+        if realigned is not None:
+            aligned_text_arguments.append(
+                {
+                    "role": item["role"],
+                    "text": text,
+                    "span": realigned,
+                }
+            )
+            continue
+        issue_type = "span_mismatch" if span is not None else "missing_span_alignment"
+        issues.append(f"text argument dropped during strict text alignment at index {index}")
+        diagnostics.append(
+            {
+                "field_path": f"text_arguments[{index}].span",
+                "issue_type": issue_type,
+                "suggested_action": "realign_or_drop",
+            }
+        )
 
-    return {
-        "event_type": event["event_type"],
-        "trigger": trigger,
-        "text_arguments": text_arguments,
-        "image_arguments": event["image_arguments"],
-    }
+    return (
+        {
+            "event_type": event["event_type"],
+            "trigger": aligned_trigger,
+            "text_arguments": aligned_text_arguments,
+            "image_arguments": event["image_arguments"],
+        },
+        issues,
+        diagnostics,
+    )
 
 
-def attach_text_spans(event: Event, raw_text: str) -> Event:
+def enforce_strict_text_grounding(event: Event, raw_text: str, token_sequence: Any = None) -> Event:
+    aligned, _, _ = align_text_grounded_event(event, raw_text, token_sequence=token_sequence)
+    return aligned
+
+
+def attach_text_spans(event: Event, raw_text: str, token_sequence: Any = None) -> Event:
     """Backward-compatible alias for strict text grounding post-processing."""
-    return enforce_strict_text_grounding(event, raw_text)
+    return enforce_strict_text_grounding(event, raw_text, token_sequence=token_sequence)
 
 
 def image_argument_needs_grounding(data: Any) -> bool:
@@ -537,20 +626,22 @@ def _validate_span(span: Any) -> list[int] | None:
     return {"start": start, "end": end}
 
 
-def find_all_text_occurrences(source_text: str, value: str) -> list[TextSpan]:
-    source = str(source_text or "")
-    target = str(value or "")
-    if not source or not target:
+def find_all_text_occurrences(source_text: Any, value: str) -> list[TextSpan]:
+    source_tokens = (
+        [str(item) for item in source_text]
+        if isinstance(source_text, list)
+        else resolve_text_token_sequence(str(source_text or ""))
+    )
+    target_tokens = tokenize_text(value)
+    if not source_tokens or not target_tokens:
         return []
 
     matches: list[TextSpan] = []
-    start = 0
-    while True:
-        index = source.find(target, start)
-        if index < 0:
-            break
-        matches.append({"start": index, "end": index + len(target)})
-        start = index + 1
+    target_len = len(target_tokens)
+    max_start = len(source_tokens) - target_len
+    for start in range(max_start + 1):
+        if source_tokens[start : start + target_len] == target_tokens:
+            matches.append({"start": start, "end": start + target_len})
     return matches
 
 
@@ -591,7 +682,8 @@ def choose_best_span(
 def find_text_span(
     source_text: str,
     value: str,
+    token_sequence: Any = None,
     anchor_spans: list[TextSpan] | None = None,
 ) -> TextSpan | None:
-    occurrences = find_all_text_occurrences(source_text, value)
+    occurrences = find_all_text_occurrences(resolve_text_token_sequence(source_text, token_sequence), value)
     return choose_best_span(occurrences, anchor_spans=anchor_spans)

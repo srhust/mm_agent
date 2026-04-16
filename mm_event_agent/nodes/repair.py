@@ -23,11 +23,12 @@ from mm_event_agent.evidence.debug import summarize_evidence_sources
 from mm_event_agent.grounding.florence2_hf import apply_grounding_results_to_event
 from mm_event_agent.grounding.debug import compare_grounding_stages, summarize_grounding_activity
 from mm_event_agent.schemas import (
+    align_text_grounded_event,
     empty_event,
-    enforce_strict_text_grounding,
     extract_json_object,
     find_text_span,
     parse_event_json,
+    resolve_text_token_sequence,
     validate_event,
 )
 
@@ -54,6 +55,50 @@ def _msg_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     return str(content)
+
+
+def _perception_image_signal(perception_summary: str) -> str:
+    summary = str(perception_summary or "").strip()
+    if not summary:
+        return ""
+    match = re.search(r"(?im)^image:\s*(.*)$", summary)
+    if match is not None:
+        return match.group(1).strip()
+    return summary
+
+
+def _has_usable_image_evidence(raw_image: Any, raw_image_desc: str, perception_summary: str) -> bool:
+    if raw_image is not None:
+        return True
+    if str(raw_image_desc or "").strip():
+        return True
+    return bool(_perception_image_signal(perception_summary))
+
+
+def _sanitize_image_arguments_for_mode(
+    event: dict[str, Any],
+    *,
+    raw_image: Any,
+    raw_image_desc: str,
+    perception_summary: str,
+) -> dict[str, Any]:
+    if _has_usable_image_evidence(raw_image, raw_image_desc, perception_summary):
+        return event
+    sanitized = deepcopy(event)
+    sanitized["image_arguments"] = []
+    return sanitized
+
+
+def _get_text_token_sequence(state: Mapping[str, Any], raw_text: str) -> list[str]:
+    fusion_context = state.get("fusion_context")
+    for container in (fusion_context, state):
+        if not isinstance(container, Mapping):
+            continue
+        for key in ("text_tokens", "token_sequence", "tokens"):
+            value = container.get(key)
+            if isinstance(value, list) and value:
+                return resolve_text_token_sequence(raw_text, value)
+    return resolve_text_token_sequence(raw_text)
 
 
 def _format_similar_events(raw: Any) -> str:
@@ -220,13 +265,14 @@ def _finalize_targeted_text_grounding(
     event: dict[str, Any],
     target_field_paths: list[str],
     raw_text: str,
+    text_tokens: list[str],
 ) -> dict[str, Any]:
     finalized = deepcopy(event)
 
     if any(path == "trigger" or path.startswith("trigger.") for path in target_field_paths):
         trigger = finalized.get("trigger")
         if isinstance(trigger, dict):
-            span = find_text_span(raw_text, str(trigger.get("text") or ""))
+            span = find_text_span(raw_text, str(trigger.get("text") or ""), token_sequence=text_tokens)
             if span is None:
                 finalized["trigger"] = None
             else:
@@ -248,7 +294,7 @@ def _finalize_targeted_text_grounding(
                 continue
             if not isinstance(item, dict):
                 continue
-            span = find_text_span(raw_text, str(item.get("text") or ""))
+            span = find_text_span(raw_text, str(item.get("text") or ""), token_sequence=text_tokens)
             if span is None:
                 continue
             item = deepcopy(item)
@@ -386,6 +432,8 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
     target_field_paths = _collect_target_field_paths(repair_plan)
     target_field_summary = _summarize_target_field_paths(target_field_paths)
     raw_text = str(state.get("text") or "")
+    text_tokens = _get_text_token_sequence(state, raw_text)
+    raw_image = state.get("raw_image")
     raw_image_desc = str(state.get("image_desc") or "")
     perception_summary = str(state.get("perception_summary") or "")
     supported_event_types = get_supported_event_types()
@@ -414,6 +462,8 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         "- Use grounding_results for image-argument repair when they provide a matching grounded bbox.\n"
         "- If verifier reports grounding_result_not_applied, prioritize aligning that image argument to the matching grounded result.\n"
         "- If grounding failed, do not force deletion of an otherwise acceptable unresolved image argument.\n"
+        "- Do not hallucinate image_arguments in text-only mode when there is no usable image evidence.\n"
+        "- Do not force one-to-one alignment between text_arguments and image_arguments; partial overlap is acceptable.\n"
         "- If a grounded bbox already exists, preserve it unless the diagnosed issue specifically requires changing it.\n"
         "- event_type must stay within the supported closed ontology.\n"
         "- text_arguments roles must be valid for the chosen event_type.\n"
@@ -421,6 +471,7 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         "- Output the COMPLETE JSON object using this schema: event_type, trigger, text_arguments, image_arguments.\n"
         '- trigger must be {"text": string, "modality": "text", "span": null} or null.\n'
         '- text_arguments items must be {"role": string, "text": string, "span": null}.\n'
+        "- Text spans are token spans [start, end), not character offsets.\n"
         '- image_arguments items must be {"role": string, "label": string, "bbox": null, "grounding_status": "unresolved"} unless you have grounded bbox data.\n'
         "- Keep trigger.text and text_arguments[].text copied from the original text when possible; do not paraphrase.\n"
         "- Use verifier diagnostics for targeted repair when available; prefer local fixes over full regeneration.\n"
@@ -429,6 +480,7 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         f"External evidence:\n{evidence}\n\n"
         f"Similar events (structural patterns):\n{similar_block}\n\n"
         f"Original text:\n{raw_text}\n\n"
+        f"Image-side context:\nraw_image_desc={raw_image_desc!r}\nperception_summary={perception_summary!r}\n\n"
         f"Verifier issues:\n{issue_block}\n\n"
         f"Verifier reason:\n{verifier_reason or '(none)'}\n\n"
         f"Verifier diagnostics:\n{diagnostics_block}\n\n"
@@ -465,15 +517,23 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_results,
             repair_plan,
         )
-        repaired_event = enforce_strict_text_grounding(
+        merged_candidate = _sanitize_image_arguments_for_mode(
+            merged_candidate,
+            raw_image=raw_image,
+            raw_image_desc=raw_image_desc,
+            perception_summary=perception_summary,
+        )
+        repaired_event, _, _ = align_text_grounded_event(
             validate_event(
                 _finalize_targeted_text_grounding(
                     validate_event(merged_candidate),
                     target_field_paths,
                     raw_text,
+                    text_tokens,
                 )
             ),
             raw_text,
+            token_sequence=text_tokens,
         )
         repaired_event = _restore_grounded_bboxes_from_current_event(current_event, repaired_event)
         grounding_debug = compare_grounding_stages(

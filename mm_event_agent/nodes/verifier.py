@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any, Mapping
 
@@ -26,6 +27,8 @@ from mm_event_agent.schemas import (
     empty_fusion_context,
     empty_layered_similar_events,
     extract_json_object,
+    resolve_text_token_sequence,
+    tokenize_text,
     validate_event,
 )
 
@@ -61,6 +64,24 @@ def _msg_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     return str(content)
+
+
+def _perception_image_signal(perception_summary: str) -> str:
+    summary = str(perception_summary or "").strip()
+    if not summary:
+        return ""
+    match = re.search(r"(?im)^image:\s*(.*)$", summary)
+    if match is not None:
+        return match.group(1).strip()
+    return summary
+
+
+def _has_usable_image_evidence(raw_image: Any, raw_image_desc: str, perception_summary: str) -> bool:
+    if raw_image is not None:
+        return True
+    if str(raw_image_desc or "").strip():
+        return True
+    return bool(_perception_image_signal(perception_summary))
 
 
 def _normalize_verdict_payload(
@@ -110,14 +131,23 @@ def _normalize_diagnostics(raw: Any) -> list[VerificationDiagnostic]:
     return out
 
 
-def _is_valid_span(span: Any, source_text: str) -> bool:
+def _get_text_token_sequence(state: Mapping[str, Any], fusion_context: Mapping[str, Any], raw_text: str) -> list[str]:
+    for container in (fusion_context, state):
+        for key in ("text_tokens", "token_sequence", "tokens"):
+            value = container.get(key) if isinstance(container, Mapping) else None
+            if isinstance(value, list) and value:
+                return resolve_text_token_sequence(raw_text, value)
+    return resolve_text_token_sequence(raw_text)
+
+
+def _is_valid_span(span: Any, source_tokens: list[str]) -> bool:
     if not isinstance(span, dict):
         return False
     start = span.get("start")
     end = span.get("end")
     if not isinstance(start, int) or not isinstance(end, int):
         return False
-    if start < 0 or end < start or end > len(source_text):
+    if start < 0 or end < start or end > len(source_tokens):
         return False
     return True
 
@@ -125,6 +155,7 @@ def _is_valid_span(span: Any, source_text: str) -> bool:
 def _validate_trigger_fields(
     event: Mapping[str, Any],
     raw_text: str,
+    text_tokens: list[str],
 ) -> tuple[list[str], list[VerificationDiagnostic]]:
     issues: list[str] = []
     diagnostics: list[VerificationDiagnostic] = []
@@ -153,7 +184,7 @@ def _validate_trigger_fields(
     span = trigger.get("span")
     text = str(trigger.get("text") or "")
     if span is not None:
-        if not _is_valid_span(span, raw_text):
+        if not _is_valid_span(span, text_tokens):
             issues.append("invalid trigger span")
             diagnostics.append(
                 {
@@ -162,7 +193,7 @@ def _validate_trigger_fields(
                     "suggested_action": "realign_or_drop",
                 }
             )
-        elif raw_text[span["start"] : span["end"]] != text:
+        elif text_tokens[span["start"] : span["end"]] != tokenize_text(text):
             issues.append("trigger text/span mismatch")
             diagnostics.append(
                 {
@@ -229,6 +260,7 @@ def _validate_event_type_and_roles(
 def _validate_text_argument_fields(
     event: Mapping[str, Any],
     raw_text: str,
+    text_tokens: list[str],
 ) -> tuple[list[str], list[VerificationDiagnostic]]:
     issues: list[str] = []
     diagnostics: list[VerificationDiagnostic] = []
@@ -256,7 +288,7 @@ def _validate_text_argument_fields(
         span = item.get("span")
         text = str(item.get("text") or "")
         if span is not None:
-            if not _is_valid_span(span, raw_text):
+            if not _is_valid_span(span, text_tokens):
                 issues.append(f"invalid text argument span at index {index}")
                 diagnostics.append(
                     {
@@ -265,7 +297,7 @@ def _validate_text_argument_fields(
                         "suggested_action": "realign_or_drop",
                     }
                 )
-            elif raw_text[span["start"] : span["end"]] != text:
+            elif text_tokens[span["start"] : span["end"]] != tokenize_text(text):
                 issues.append(f"text argument span mismatch at index {index}")
                 diagnostics.append(
                     {
@@ -430,9 +462,38 @@ def _validate_grounding_awareness(
     return issues, diagnostics, grounded_support_count
 
 
+def _validate_modality_specific_consistency(
+    event: Mapping[str, Any],
+    *,
+    raw_image: Any,
+    raw_image_desc: str,
+    perception_summary: str,
+) -> tuple[list[str], list[VerificationDiagnostic]]:
+    issues: list[str] = []
+    diagnostics: list[VerificationDiagnostic] = []
+    image_arguments = event.get("image_arguments")
+    if not isinstance(image_arguments, list) or not image_arguments:
+        return issues, diagnostics
+
+    if not _has_usable_image_evidence(raw_image, raw_image_desc, perception_summary):
+        issues.append("image arguments present without usable image evidence in a text-only run")
+        diagnostics.append(
+            {
+                "field_path": "image_arguments",
+                "issue_type": "missing_image_evidence",
+                "suggested_action": "drop_or_rebuild",
+            }
+        )
+    return issues, diagnostics
+
+
 def _collect_field_level_issues(
     raw_event: Any,
     raw_text: str,
+    text_tokens: list[str],
+    raw_image: Any = None,
+    raw_image_desc: str = "",
+    perception_summary: str = "",
     grounding_results: Any = None,
 ) -> tuple[list[str], list[VerificationDiagnostic]]:
     if not isinstance(raw_event, dict):
@@ -446,19 +507,27 @@ def _collect_field_level_issues(
     issues: list[str] = []
     diagnostics: list[VerificationDiagnostic] = []
     ontology_issues, ontology_diagnostics = _validate_event_type_and_roles(raw_event)
-    trigger_issues, trigger_diagnostics = _validate_trigger_fields(raw_event, raw_text)
-    text_issues, text_diagnostics = _validate_text_argument_fields(raw_event, raw_text)
+    trigger_issues, trigger_diagnostics = _validate_trigger_fields(raw_event, raw_text, text_tokens)
+    text_issues, text_diagnostics = _validate_text_argument_fields(raw_event, raw_text, text_tokens)
     image_issues, image_diagnostics = _validate_image_argument_fields(raw_event)
+    modality_issues, modality_diagnostics = _validate_modality_specific_consistency(
+        raw_event,
+        raw_image=raw_image,
+        raw_image_desc=raw_image_desc,
+        perception_summary=perception_summary,
+    )
     grounding_issues, grounding_diagnostics, _ = _validate_grounding_awareness(raw_event, grounding_results)
     issues.extend(ontology_issues)
     issues.extend(trigger_issues)
     issues.extend(text_issues)
     issues.extend(image_issues)
+    issues.extend(modality_issues)
     issues.extend(grounding_issues)
     diagnostics.extend(ontology_diagnostics)
     diagnostics.extend(trigger_diagnostics)
     diagnostics.extend(text_diagnostics)
     diagnostics.extend(image_diagnostics)
+    diagnostics.extend(modality_diagnostics)
     diagnostics.extend(grounding_diagnostics)
     return issues, diagnostics
 
@@ -504,6 +573,8 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
     raw_text = str(fusion_context.get("raw_text") or "")
     raw_image_desc = str(fusion_context.get("raw_image_desc") or "")
     perception_summary = str(fusion_context.get("perception_summary") or "")
+    raw_image = state.get("raw_image")
+    text_tokens = _get_text_token_sequence(state, fusion_context, raw_text)
     evidence_items = fusion_context.get("evidence")
     if not isinstance(evidence_items, list):
         evidence_items = []
@@ -516,7 +587,15 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         image_arguments_after=raw_event.get("image_arguments") if isinstance(raw_event, dict) else [],
     )
     raw_event_type = str(raw_event.get("event_type") or "").strip() if isinstance(raw_event, dict) else ""
-    field_issues, field_diagnostics = _collect_field_level_issues(raw_event, raw_text, grounding_results)
+    field_issues, field_diagnostics = _collect_field_level_issues(
+        raw_event,
+        raw_text,
+        text_tokens,
+        raw_image,
+        raw_image_desc,
+        perception_summary,
+        grounding_results,
+    )
     _, _, grounded_support_count = _validate_grounding_awareness(raw_event, grounding_results)
     try:
         event = validate_event(raw_event)
@@ -562,17 +641,21 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         "Check whether image argument roles are semantically appropriate for their labels.\n"
         "Pay special attention to the listed closely related role confusions and flag them when the event uses the wrong role despite using an allowed role name.\n"
         "2) Text support: Are event.trigger.text and event.text_arguments supported by fusion_context.raw_text? "
-        "Check quoted text and spans.\n"
-        "3) Image support: Are event.image_arguments supported by fusion_context.raw_image_desc, the current derived representation of the primary raw image input? "
+        "Interpret spans as token spans [start, end), not character offsets.\n"
+        "3) Modality-specific support: Treat text_arguments and image_arguments as separate evidence views, not a one-to-one alignment requirement.\n"
+        "A valid text-only run may have empty image_arguments.\n"
+        "A valid multimodal run may have partial overlap across modalities.\n"
+        "Only flag cross-modal issues when there is a direct contradiction for the same role or when image arguments appear without usable image evidence.\n"
+        "4) Image support: Are event.image_arguments supported by fusion_context.raw_image_desc and perception_summary, the derived image-side representations of the primary raw image input when available? "
         'Unresolved image arguments are allowed only when grounding_status is "unresolved".\n'
         "If an image argument is marked grounded and has a bbox, treat that as stronger image-side support.\n"
         "If grounding_results contain a grounded match for a role/label pair, unresolved image arguments for that same pair may indicate an inconsistency.\n"
         "If grounding_results show failed grounding, do not over-penalize otherwise acceptable unresolved image arguments.\n"
-        "4) Evidence support: Are event claims supported by fusion_context.evidence item snippets when evidence items are available? "
+        "5) Evidence support: Are event claims supported by fusion_context.evidence item snippets when evidence items are available? "
         "Use evidence snippets as the primary factual basis for externally supported facts.\n"
-        "5) Structure: Is the event schema valid, including trigger/text_arguments/image_arguments shape and types, and is it consistent with "
+        "6) Structure: Is the event schema valid, including trigger/text_arguments/image_arguments shape and types, and is it consistent with "
         "fusion_context.patterns when patterns are available?\n"
-        "6) If text, image, and evidence conflict with patterns, prefer grounded support over patterns.\n\n"
+        "7) If text, image, and evidence conflict with patterns, prefer grounded support over patterns.\n\n"
         "Return ONLY one JSON object (no markdown), exactly this shape:\n"
         '{"verdict": "YES" or "NO", "issues": ["unsupported argument", "wrong event type", ...], "confidence": 0.0, "reason": "short explanation", "diagnostics": [{"field_path": "trigger.span", "issue_type": "span_mismatch", "suggested_action": "realign_or_drop"}]}\n'
         "Use an empty issues array when verdict is YES. Confidence must be a float from 0 to 1. "

@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import json
+import mimetypes
+import os
+import re
 import time
+from pathlib import Path
 from typing import Any, Mapping
 
 from langchain_core.messages import HumanMessage
@@ -22,11 +28,12 @@ from mm_event_agent.runtime_config import settings
 from mm_event_agent.evidence.debug import summarize_evidence_sources
 from mm_event_agent.grounding.debug import summarize_grounding_activity
 from mm_event_agent.schemas import (
+    align_text_grounded_event,
     build_grounding_requests,
     empty_event,
     empty_fusion_context,
-    enforce_strict_text_grounding,
     parse_event_json,
+    resolve_text_token_sequence,
 )
 from mm_event_agent.grounding.florence2_hf import (
     apply_grounding_results_to_event,
@@ -40,14 +47,14 @@ def _get_llm() -> ChatOpenAI:
     global _llm
     if _llm is None:
         kwargs: dict[str, Any] = {
-            "model": settings.openai_model,
+            "model": settings.extraction_model_name,
             "temperature": 0.2,
-            "timeout": settings.openai_timeout_seconds,
+            "timeout": settings.extraction_timeout_seconds,
         }
-        if settings.openai_api_key:
-            kwargs["api_key"] = settings.openai_api_key
-        if settings.openai_base_url:
-            kwargs["base_url"] = settings.openai_base_url
+        if settings.extraction_api_key:
+            kwargs["api_key"] = settings.extraction_api_key
+        if settings.extraction_api_base:
+            kwargs["base_url"] = settings.extraction_api_base
         _llm = ChatOpenAI(**kwargs)
     return _llm
 
@@ -55,11 +62,74 @@ def _get_llm() -> ChatOpenAI:
 def _msg_text(content: Any) -> str:
     if isinstance(content, str):
         return content
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                chunks.append(str(item.get("text") or ""))
+        return " ".join(chunks)
     return str(content)
 
 
-def _extract_stage_json(prompt: str) -> dict[str, Any]:
-    out = _get_llm().invoke([HumanMessage(content=prompt)])
+def _load_image_bytes(raw_image: Any) -> tuple[bytes, str] | None:
+    if raw_image is None:
+        return None
+    if isinstance(raw_image, (bytes, bytearray)):
+        return bytes(raw_image), "image/png"
+    if isinstance(raw_image, str):
+        candidate = raw_image.strip()
+        if not candidate:
+            return None
+        if candidate.startswith("data:"):
+            header, _, payload = candidate.partition(",")
+            if not payload:
+                return None
+            mime_type = header.split(";", 1)[0].replace("data:", "") or "image/png"
+            try:
+                return base64.b64decode(payload), mime_type
+            except Exception:
+                return None
+        if candidate.startswith("http://") or candidate.startswith("https://"):
+            return candidate.encode("utf-8"), "url"
+        if not os.path.exists(candidate):
+            return None
+        mime_type = mimetypes.guess_type(candidate)[0] or "image/png"
+        return Path(candidate).read_bytes(), mime_type
+    try:
+        from PIL import Image
+    except Exception:
+        Image = None  # type: ignore[assignment]
+    if Image is not None and isinstance(raw_image, Image.Image):
+        buffer = io.BytesIO()
+        raw_image.convert("RGB").save(buffer, format="PNG")
+        return buffer.getvalue(), "image/png"
+    return None
+
+
+def _build_image_content_block(raw_image: Any) -> dict[str, Any] | None:
+    if isinstance(raw_image, str):
+        candidate = raw_image.strip()
+        if candidate.startswith("http://") or candidate.startswith("https://") or candidate.startswith("data:"):
+            return {"type": "image_url", "image_url": {"url": candidate}}
+    payload = _load_image_bytes(raw_image)
+    if payload is None:
+        return None
+    image_bytes, mime_type = payload
+    if mime_type == "url":
+        return {"type": "image_url", "image_url": {"url": image_bytes.decode("utf-8")}}
+    data_url = "data:" + mime_type + ";base64," + base64.b64encode(image_bytes).decode("ascii")
+    return {"type": "image_url", "image_url": {"url": data_url}}
+
+
+def _build_stage_message(prompt: str, *, raw_image: Any = None) -> HumanMessage:
+    image_block = _build_image_content_block(raw_image)
+    if image_block is None:
+        return HumanMessage(content=prompt)
+    return HumanMessage(content=[{"type": "text", "text": prompt}, image_block])
+
+
+def _extract_stage_json(prompt: str, *, raw_image: Any = None) -> dict[str, Any]:
+    out = _get_llm().invoke([_build_stage_message(prompt, raw_image=raw_image)])
     raw = _msg_text(out.content)
     from mm_event_agent.schemas import extract_json_object
 
@@ -70,18 +140,39 @@ def _extract_stage_json(prompt: str) -> dict[str, Any]:
 
 
 def _build_image_side_info(raw_image_desc: str, perception_summary: str) -> str:
-    """Build the current image-side prompt context from intermediate signals.
-
-    The raw image itself is not consumed here yet; extraction still operates on
-    the derived image description / summary pathway until future grounding work.
-    This keeps the existing extraction behavior runnable while raw_image is the
-    formal primary image input at graph entry.
-    """
+    """Build compact auxiliary image-side context from intermediate signals."""
     summary = str(perception_summary or "").strip()
     image_desc = str(raw_image_desc or "").strip()
     if summary:
         return f"raw_image_desc: {image_desc}\nperception_summary: {summary}"
     return f"raw_image_desc: {image_desc}"
+
+
+def _perception_image_signal(perception_summary: str) -> str:
+    summary = str(perception_summary or "").strip()
+    if not summary:
+        return ""
+    match = re.search(r"(?im)^image:\s*(.*)$", summary)
+    if match is not None:
+        return match.group(1).strip()
+    return summary
+
+
+def _has_usable_image_evidence(raw_image: Any, raw_image_desc: str, perception_summary: str) -> bool:
+    if _build_image_content_block(raw_image) is not None:
+        return True
+    if str(raw_image_desc or "").strip():
+        return True
+    return bool(_perception_image_signal(perception_summary))
+
+
+def _get_text_token_sequence(state: Mapping[str, Any], fusion_context: Mapping[str, Any], raw_text: str) -> list[str]:
+    for container in (fusion_context, state):
+        for key in ("text_tokens", "token_sequence", "tokens"):
+            value = container.get(key) if isinstance(container, Mapping) else None
+            if isinstance(value, list) and value:
+                return resolve_text_token_sequence(raw_text, value)
+    return resolve_text_token_sequence(raw_text)
 
 
 def format_text_event_examples_for_prompt(examples: list[dict[str, Any]], top_k: int = 2) -> str:
@@ -185,6 +276,7 @@ def _stage_a_select_event_type(
     evidence_items: list[Any],
     patterns: Any,
     event_type_mode: str,
+    raw_image: Any = None,
 ) -> str:
     allowed_event_types = get_supported_event_types()
     ontology_block = format_full_ontology_for_prompt()
@@ -224,11 +316,15 @@ def _stage_a_select_event_type(
         "- Use cross-modal bridge hints only as auxiliary semantic support.\n"
         "- If evidence conflicts with retrieved examples, prefer evidence and ontology over retrieved examples.\n"
         "- Do not invent new labels or open-set variants.\n"
+        f"- raw_image direct vision is {'enabled' if settings.extraction_stage_a_use_raw_image else 'disabled'} for this stage.\n"
         f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
         f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
         f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
     )
-    parsed = _extract_stage_json(prompt)
+    parsed = _extract_stage_json(
+        prompt,
+        raw_image=raw_image if settings.extraction_stage_a_use_raw_image else None,
+    )
     event_type = str(parsed.get("event_type") or "").strip()
     if normalized_mode == "transfer" and event_type == "Unsupported":
         return event_type
@@ -268,7 +364,7 @@ def _stage_b_extract_text_fields(
         "- each text argument text must be copied directly from raw_text.\n"
         "- do not paraphrase trigger or text arguments.\n"
         "- if evidence is insufficient, prefer omission over hallucination.\n"
-        "- span must be null in the model output; post-processing will align spans.\n"
+        "- span must be null in the model output; post-processing will align token spans.\n"
         'Return ONLY JSON: {"trigger": {"text": string, "modality": "text", "span": null} | null, '
         '"text_arguments": [{"role": string, "text": string, "span": null}]}\n\n'
         f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
@@ -290,6 +386,8 @@ def _stage_c_extract_image_arguments(
     text_arguments: list[dict[str, Any]],
     patterns: Any,
     evidence_items: list[Any],
+    raw_image: Any = None,
+    raw_text: str = "",
 ) -> list[dict[str, Any]]:
     allowed_roles = get_allowed_image_roles(event_type)
     schema_block = format_event_schema_for_prompt(event_type)
@@ -298,7 +396,7 @@ def _stage_c_extract_image_arguments(
     formatted_bridge_examples_topk = _format_bridge_examples_topk(patterns)
     prompt = (
         "Stage C: extract image argument semantic candidates.\n"
-        "Extract image argument semantic candidates from image-side information.\n"
+        "Extract image argument semantic candidates from the raw image with auxiliary image-side context.\n"
         "Event ontology for the selected event_type:\n"
         f"{schema_block}\n\n"
         "Retrieved image semantic examples:\n"
@@ -314,6 +412,9 @@ def _stage_c_extract_image_arguments(
         "- Use bridge hints to connect text roles and visual cues.\n"
         "- Use the role definitions and extraction notes to map visible evidence to semantic roles.\n"
         "- condition on the selected event_type and the extracted text arguments.\n"
+        "- raw_image is the primary visual evidence for this stage.\n"
+        "- Treat image_side_info as auxiliary context, redundancy, and fallback support rather than the only visual input.\n"
+        "- raw_text can be used for cross-modal disambiguation, but image arguments still require direct visual support.\n"
         "- output semantic image arguments only.\n"
         "- Be conservative: prefer omission over unsupported image-role prediction.\n"
         "- For visually weaker roles, require direct visual evidence rather than generic scene context.\n"
@@ -322,17 +423,19 @@ def _stage_c_extract_image_arguments(
         "- do not pretend to know a precise bbox.\n"
         "- use role + label only when supported by image-side information.\n"
         'Return ONLY JSON: {"image_arguments": [{"role": string, "label": string, "bbox": null, "grounding_status": "unresolved"}]}\n\n'
-        f'{{"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
+        f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
+        f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
         f'"text_arguments": {json.dumps(text_arguments, ensure_ascii=False)}, '
         f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
     )
-    parsed = _extract_stage_json(prompt)
+    parsed = _extract_stage_json(prompt, raw_image=raw_image)
     image_arguments = parsed.get("image_arguments")
     return image_arguments if isinstance(image_arguments, list) else []
 
 
 def _run_staged_extraction(
     raw_text: str,
+    raw_image: Any,
     raw_image_desc: str,
     perception_summary: str,
     patterns: Any,
@@ -340,7 +443,15 @@ def _run_staged_extraction(
     event_type_mode: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     image_side_info = _build_image_side_info(raw_image_desc, perception_summary)
-    event_type = _stage_a_select_event_type(raw_text, image_side_info, evidence_items, patterns, event_type_mode)
+    has_usable_image_evidence = _has_usable_image_evidence(raw_image, raw_image_desc, perception_summary)
+    event_type = _stage_a_select_event_type(
+        raw_text,
+        image_side_info,
+        evidence_items,
+        patterns,
+        event_type_mode,
+        raw_image,
+    )
     stage_a_info = {
         "stage_a_event_type_mode": str(event_type_mode or "closed_set"),
         "stage_a_selected_event_type": event_type,
@@ -349,13 +460,18 @@ def _run_staged_extraction(
     if event_type == "Unsupported":
         return empty_event(), stage_a_info
     text_fields = _stage_b_extract_text_fields(event_type, raw_text, image_side_info, patterns, evidence_items)
-    image_arguments = _stage_c_extract_image_arguments(
-        event_type,
-        image_side_info,
-        text_fields["text_arguments"],
-        patterns,
-        evidence_items,
-    )
+    if has_usable_image_evidence:
+        image_arguments = _stage_c_extract_image_arguments(
+            event_type,
+            image_side_info,
+            text_fields["text_arguments"],
+            patterns,
+            evidence_items,
+            raw_image,
+            raw_text,
+        )
+    else:
+        image_arguments = []
     return (
         {
             "event_type": event_type,
@@ -413,6 +529,7 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
     event_type_mode = str(state.get("event_type_mode") or "closed_set")
     patterns = fusion_context.get("patterns")
     evidence_items = fusion_context.get("evidence")
+    text_tokens = _get_text_token_sequence(state, fusion_context, raw_text)
 
     if not isinstance(patterns, dict):
         patterns = {}
@@ -430,6 +547,7 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
     try:
         assembled_event, stage_a_info = _run_staged_extraction(
             raw_text,
+            raw_image,
             raw_image_desc,
             perception_summary,
             patterns,
@@ -439,10 +557,8 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
         if not assembled_event["event_type"]:
             event = empty_event()
         else:
-            event = enforce_strict_text_grounding(
-                parse_event_json(json.dumps(assembled_event, ensure_ascii=False)),
-                raw_text,
-            )
+            parsed_event = parse_event_json(json.dumps(assembled_event, ensure_ascii=False))
+            event, _, _ = align_text_grounded_event(parsed_event, raw_text, token_sequence=text_tokens)
         image_arguments_before = list(event.get("image_arguments")) if isinstance(event.get("image_arguments"), list) else []
         event, grounding_results, grounding_attempted, grounding_requests = _maybe_run_grounding(raw_image, event)
         grounding_summary = summarize_grounding_activity(

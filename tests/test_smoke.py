@@ -4,7 +4,9 @@ from dataclasses import replace
 import os
 import unittest
 import mm_event_agent.nodes.extraction as extraction_module
+import mm_event_agent.nodes.perception as perception_module
 import mm_event_agent.runtime_config as runtime_config
+import mm_event_agent.grounding.florence2_hf as grounding_module
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -12,12 +14,16 @@ from mm_event_agent.graph import build_graph
 from mm_event_agent.evidence.debug import build_evidence_source_snapshot, summarize_evidence_sources
 from mm_event_agent.grounding.florence2_hf import (
     Florence2HFGrounder,
+    Florence2ServiceGrounder,
     apply_grounding_results_to_event,
+    build_grounding_service_payload,
     execute_grounding_requests,
+    parse_grounding_service_response,
 )
 from mm_event_agent.grounding.debug import compare_grounding_stages, summarize_grounding_activity
 from mm_event_agent.nodes.extraction import extraction
 from mm_event_agent.nodes.fusion import fusion
+from mm_event_agent.nodes.perception import perception
 from mm_event_agent.nodes.repair import repair
 from mm_event_agent.nodes.rag import rag
 from mm_event_agent.nodes.search import search
@@ -29,6 +35,7 @@ from mm_event_agent.ontology import (
 )
 from mm_event_agent.search.tavily_client import TavilySearchClient
 from mm_event_agent.schemas import (
+    align_text_grounded_event,
     attach_retrieval_metadata,
     ValidationError,
     attach_text_spans,
@@ -58,10 +65,12 @@ class RecordingLLM:
     def __init__(self, response: str) -> None:
         self.response = response
         self.prompts: list[str] = []
+        self.contents: list[object] = []
 
     def invoke(self, messages):
         for message in messages:
             content = getattr(message, "content", "")
+            self.contents.append(content)
             self.prompts.append(content if isinstance(content, str) else str(content))
         return SimpleNamespace(content=self.response)
 
@@ -91,6 +100,11 @@ def make_state() -> dict:
 
 
 class SmokeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        extraction_module._llm = None
+        perception_module._PERCEPTION_CLIENT_CACHE.clear()
+        perception_module._PERCEPTION_RESULT_CACHE.clear()
+
     def test_load_settings_exposes_future_rag_flags_without_changing_defaults(self) -> None:
         with patch.dict(
             os.environ,
@@ -106,6 +120,21 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(loaded.rag_qwen_device, "cuda:0")
         self.assertEqual(loaded.rag_qwen_dtype, "bfloat16")
         self.assertEqual(loaded.rag_qwen_attn_impl, "sdpa")
+        self.assertFalse(loaded.use_vlm_perception)
+        self.assertEqual(loaded.perception_backend, "openai_compatible")
+        self.assertEqual(loaded.perception_model_name, "qwen3.5-plus")
+        self.assertEqual(loaded.perception_api_base, "")
+        self.assertEqual(loaded.perception_api_key, "")
+        self.assertEqual(loaded.perception_timeout_seconds, 30.0)
+        self.assertTrue(loaded.perception_cache_enabled)
+        self.assertEqual(loaded.extraction_backend, "openai_compatible")
+        self.assertEqual(loaded.extraction_model_name, "gpt-4o-mini")
+        self.assertEqual(loaded.extraction_api_base, "")
+        self.assertEqual(loaded.extraction_api_key, "")
+        self.assertEqual(loaded.extraction_timeout_seconds, 30.0)
+        self.assertFalse(loaded.extraction_stage_a_use_raw_image)
+        self.assertIn('"image_desc"', loaded.perception_instruction)
+        self.assertEqual(loaded.florence2_task, "<CAPTION_TO_PHRASE_GROUNDING>")
         self.assertEqual(loaded.rag_text_encoder_model, "sentence-transformers/all-MiniLM-L6-v2")
         self.assertEqual(loaded.rag_qwen_embedding_model_path, "")
         self.assertEqual(loaded.rag_qwen_embedding_device, "cuda:0")
@@ -168,8 +197,8 @@ class SmokeTests(unittest.TestCase):
                         "modality": "text",
                         "event_type": "Conflict:Attack",
                         "raw_text": "A bomb exploded in a market",
-                        "trigger": {"text": "exploded", "span": {"start": 7, "end": 15}},
-                        "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+                        "trigger": {"text": "exploded", "span": {"start": 2, "end": 3}},
+                        "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
                         "pattern_summary": "Attack reports often name place and instrument.",
                         "retrieval_text": "Conflict:Attack exploded bomb market Place",
                     }
@@ -209,14 +238,121 @@ class SmokeTests(unittest.TestCase):
         self.assertTrue(final["verified"])
         self.assertEqual(final["event"]["event_type"], "Conflict:Attack")
         self.assertEqual(final["event"]["trigger"]["text"], "exploded")
-        self.assertEqual(final["event"]["trigger"]["span"], {"start": 7, "end": 15})
+        self.assertEqual(final["event"]["trigger"]["span"], {"start": 2, "end": 3})
         self.assertEqual(final["event"]["text_arguments"][0]["role"], "Place")
         self.assertEqual(final["event"]["text_arguments"][0]["text"], "market")
-        self.assertEqual(final["event"]["text_arguments"][0]["span"], {"start": 21, "end": 27})
+        self.assertEqual(final["event"]["text_arguments"][0]["span"], {"start": 5, "end": 6})
         self.assertEqual(final["event"]["image_arguments"][0]["bbox"], None)
         self.assertEqual(final["event"]["image_arguments"][0]["grounding_status"], "unresolved")
         self.assertEqual(final["search_query"], "A bomb exploded in a market")
         self.assertEqual(len(final["evidence"]), 1)
+
+    def test_perception_raw_image_present_uses_vlm_outputs(self) -> None:
+        state = make_state()
+        state["raw_image"] = "fake.jpg"
+        state["image_desc"] = ""
+
+        with patch.object(
+            perception_module,
+            "settings",
+            replace(perception_module.settings, use_vlm_perception=True, perception_cache_enabled=True),
+        ), patch(
+            "mm_event_agent.nodes.perception._invoke_remote_perception",
+            return_value={
+                "image_desc": "Smoke rises above damaged market stalls.",
+                "perception_summary": "Text: A bomb exploded in a market\nImage: Smoke rises above damaged market stalls.",
+            },
+        ) as mock_invoke:
+            result = perception(state)
+
+        self.assertTrue(mock_invoke.called)
+        self.assertEqual(result["image_desc"], "Smoke rises above damaged market stalls.")
+        self.assertIn("Image: Smoke rises above damaged market stalls.", result["perception_summary"])
+
+    def test_perception_repeated_identical_calls_reuse_cached_result(self) -> None:
+        state = make_state()
+        state["raw_image"] = b"fake-image-bytes"
+        state["image_desc"] = ""
+
+        with patch.object(
+            perception_module,
+            "settings",
+            replace(perception_module.settings, use_vlm_perception=True, perception_cache_enabled=True),
+        ), patch(
+            "mm_event_agent.nodes.perception._invoke_remote_perception",
+            return_value={
+                "image_desc": "people running past smoke",
+                "perception_summary": "Text: A bomb exploded in a market\nImage: people running past smoke",
+            },
+        ) as mock_invoke:
+            first = perception(state)
+            second = perception(state)
+
+        self.assertEqual(first, second)
+        self.assertEqual(mock_invoke.call_count, 1)
+
+    def test_perception_api_client_is_reused_across_calls(self) -> None:
+        class FakeClient:
+            instances = 0
+
+            def __init__(self, **kwargs) -> None:
+                type(self).instances += 1
+                self.kwargs = kwargs
+
+            def invoke(self, _messages):
+                return SimpleNamespace(
+                    content='{"image_desc":"smoke near market stalls","perception_summary":"Text: A bomb exploded in a market\\nImage: smoke near market stalls"}'
+                )
+
+        state = make_state()
+        state["raw_image"] = b"fake-image-bytes"
+        state["image_desc"] = ""
+
+        with patch.object(
+            perception_module,
+            "settings",
+            replace(
+                perception_module.settings,
+                use_vlm_perception=True,
+                perception_cache_enabled=False,
+                perception_model_name="qwen3.5-plus",
+                perception_api_base="https://example.invalid/v1",
+                perception_api_key="secret",
+            ),
+        ), patch("mm_event_agent.nodes.perception.ChatOpenAI", FakeClient):
+            first = perception(state)
+            state["text"] = "A second bomb exploded near the market"
+            second = perception(state)
+
+        self.assertEqual(FakeClient.instances, 1)
+        self.assertEqual(first["image_desc"], "smoke near market stalls")
+        self.assertEqual(second["image_desc"], "smoke near market stalls")
+
+    def test_perception_without_raw_image_uses_existing_image_desc(self) -> None:
+        state = make_state()
+        state["raw_image"] = None
+        state["image_desc"] = "people running, smoke"
+
+        result = perception(state)
+
+        self.assertEqual(result["image_desc"], "people running, smoke")
+        self.assertEqual(
+            result["perception_summary"],
+            "Text: A bomb exploded in a market\nImage: people running, smoke",
+        )
+
+    def test_perception_without_raw_image_or_image_desc_returns_safe_empty_image_side(self) -> None:
+        state = make_state()
+        state["raw_image"] = None
+        state["image_desc"] = ""
+
+        result = perception(state)
+
+        self.assertEqual(result["image_desc"], "")
+        self.assertEqual(
+            result["perception_summary"],
+            "Text: A bomb exploded in a market\nImage: ",
+        )
 
     def test_supported_event_types_match_closed_set(self) -> None:
         self.assertEqual(
@@ -398,6 +534,30 @@ class SmokeTests(unittest.TestCase):
 
         self.assertEqual(closed_set_result, "Conflict:Attack")
         self.assertEqual(transfer_result, "Unsupported")
+
+    def test_stage_a_can_optionally_attach_raw_image(self) -> None:
+        llm = RecordingLLM('{"event_type":"Conflict:Attack"}')
+
+        with patch.object(
+            extraction_module,
+            "settings",
+            replace(extraction_module.settings, extraction_stage_a_use_raw_image=True),
+        ), patch("mm_event_agent.nodes.extraction._get_llm", return_value=llm):
+            result = extraction_module._stage_a_select_event_type(
+                raw_text="A bomb exploded in a market",
+                image_side_info="raw_image_desc: smoke near market",
+                evidence_items=[],
+                patterns=empty_layered_similar_events(),
+                event_type_mode="closed_set",
+                raw_image=b"fake-image-bytes",
+            )
+
+        self.assertEqual(result, "Conflict:Attack")
+        self.assertTrue(llm.contents)
+        self.assertIsInstance(llm.contents[0], list)
+        self.assertEqual(llm.contents[0][0]["type"], "text")
+        self.assertEqual(llm.contents[0][1]["type"], "image_url")
+        self.assertIn("raw_image direct vision is enabled", llm.contents[0][0]["text"])
 
     def test_stage_b_still_works_with_empty_local_rag(self) -> None:
         llm = RecordingLLM('{"trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[]}')
@@ -1038,8 +1198,8 @@ class SmokeTests(unittest.TestCase):
         }
         state["event"] = {
             "event_type": "Conflict:Attack",
-            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 4}},
-            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 1}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
             "image_arguments": [],
         }
 
@@ -1106,10 +1266,10 @@ class SmokeTests(unittest.TestCase):
         }
         state["event"] = {
             "event_type": "Justice:Arrest-Jail",
-            "trigger": {"text": "arrested", "modality": "text", "span": {"start": 7, "end": 15}},
+            "trigger": {"text": "arrested", "modality": "text", "span": {"start": 1, "end": 2}},
             "text_arguments": [
-                {"role": "Agent", "text": "suspect", "span": {"start": 20, "end": 27}},
-                {"role": "Person", "text": "Police", "span": {"start": 0, "end": 6}},
+                {"role": "Agent", "text": "suspect", "span": {"start": 3, "end": 4}},
+                {"role": "Person", "text": "Police", "span": {"start": 0, "end": 1}},
             ],
             "image_arguments": [],
         }
@@ -1141,8 +1301,8 @@ class SmokeTests(unittest.TestCase):
         }
         state["event"] = {
             "event_type": "Life:Die",
-            "trigger": {"text": "met", "modality": "text", "span": {"start": 8, "end": 11}},
-            "text_arguments": [{"role": "Place", "text": "Geneva", "span": {"start": 15, "end": 21}}],
+            "trigger": {"text": "met", "modality": "text", "span": {"start": 1, "end": 2}},
+            "text_arguments": [{"role": "Place", "text": "Geneva", "span": {"start": 3, "end": 4}}],
             "image_arguments": [],
         }
 
@@ -1172,8 +1332,8 @@ class SmokeTests(unittest.TestCase):
         }
         state["event"] = {
             "event_type": "Conflict:Attack",
-            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
-            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
             "image_arguments": [
                 {"role": "Place", "label": "market area", "bbox": [1.0, 2.0, 11.0, 12.0], "grounding_status": "grounded"}
             ],
@@ -1211,8 +1371,8 @@ class SmokeTests(unittest.TestCase):
         }
         state["event"] = {
             "event_type": "Conflict:Attack",
-            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
-            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
             "image_arguments": [
                 {"role": "Place", "label": "market area", "bbox": [1.0, 2.0, 11.0, 12.0], "grounding_status": "grounded"}
             ],
@@ -1252,8 +1412,8 @@ class SmokeTests(unittest.TestCase):
         }
         state["event"] = {
             "event_type": "Conflict:Attack",
-            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
-            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
             "image_arguments": [
                 {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}
             ],
@@ -1280,6 +1440,84 @@ class SmokeTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertEqual(result["issues"], [])
 
+    def test_verifier_accepts_valid_text_only_event_with_empty_image_arguments(self) -> None:
+        state = make_state()
+        state["raw_image"] = None
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": "",
+            "perception_summary": "Text: A bomb exploded in a market\nImage: ",
+            "patterns": [],
+            "evidence": [],
+        }
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
+            "image_arguments": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(['{"verdict":"YES","issues":[],"confidence":0.9,"reason":"valid text-only event"}']),
+        ):
+            result = verifier(state)
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["issues"], [])
+
+    def test_verifier_accepts_partial_multimodal_overlap_without_one_to_one_alignment(self) -> None:
+        state = make_state()
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
+            "text_arguments": [{"role": "Instrument", "text": "bomb", "span": {"start": 1, "end": 2}}],
+            "image_arguments": [{"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(['{"verdict":"YES","issues":[],"confidence":0.88,"reason":"partial modality overlap is acceptable"}']),
+        ):
+            result = verifier(state)
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["issues"], [])
+
+    def test_verifier_flags_image_arguments_in_text_only_run(self) -> None:
+        state = make_state()
+        state["raw_image"] = None
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": "",
+            "perception_summary": "Text: A bomb exploded in a market\nImage: ",
+            "patterns": [],
+            "evidence": [],
+        }
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
+            "image_arguments": [{"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(['{"verdict":"YES","issues":[],"confidence":0.8,"reason":"looks good"}']),
+        ):
+            result = verifier(state)
+
+        self.assertFalse(result["verified"])
+        self.assertIn("image arguments present without usable image evidence in a text-only run", result["issues"])
+        self.assertTrue(any(x["issue_type"] == "missing_image_evidence" for x in result["verifier_diagnostics"]))
+
     def test_verifier_can_flag_unresolved_argument_when_grounded_match_exists(self) -> None:
         state = make_state()
         state["fusion_context"] = {
@@ -1291,8 +1529,8 @@ class SmokeTests(unittest.TestCase):
         }
         state["event"] = {
             "event_type": "Conflict:Attack",
-            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
-            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
             "image_arguments": [
                 {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}
             ],
@@ -1325,7 +1563,7 @@ class SmokeTests(unittest.TestCase):
     def test_find_all_text_occurrences_returns_all_exact_matches(self) -> None:
         self.assertEqual(
             find_all_text_occurrences("market north market south", "market"),
-            [{"start": 0, "end": 6}, {"start": 13, "end": 19}],
+            [{"start": 0, "end": 1}, {"start": 2, "end": 3}],
         )
 
     def test_find_text_span_returns_none_when_repeated_match_is_ambiguous(self) -> None:
@@ -1334,8 +1572,8 @@ class SmokeTests(unittest.TestCase):
     def test_choose_best_span_uses_anchor_context_for_repeated_matches(self) -> None:
         occurrences = find_all_text_occurrences("market north market south", "market")
         self.assertEqual(
-            choose_best_span(occurrences, anchor_spans=[{"start": 20, "end": 25}]),
-            {"start": 13, "end": 19},
+            choose_best_span(occurrences, anchor_spans=[{"start": 3, "end": 4}]),
+            {"start": 2, "end": 3},
         )
 
     def test_attach_text_spans_drops_unaligned_text_grounded_fields(self) -> None:
@@ -1354,12 +1592,45 @@ class SmokeTests(unittest.TestCase):
         self.assertIsNone(aligned["trigger"])
         self.assertEqual(
             aligned["text_arguments"],
-            [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
         )
         self.assertEqual(
             aligned["image_arguments"],
             [{"role": "Place", "label": "market area", "bbox": [0, 1, 2, 3], "grounding_status": "grounded"}],
         )
+
+    def test_align_text_grounded_event_realigns_mismatched_spans_when_unique(self) -> None:
+        aligned, issues, diagnostics = align_text_grounded_event(
+            {
+                "event_type": "Conflict:Attack",
+                "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 1}},
+                "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 0, "end": 1}}],
+                "image_arguments": [],
+            },
+            "A bomb exploded in a market",
+        )
+
+        self.assertEqual(aligned["trigger"]["span"], {"start": 2, "end": 3})
+        self.assertEqual(aligned["text_arguments"][0]["span"], {"start": 5, "end": 6})
+        self.assertEqual(issues, [])
+        self.assertEqual(diagnostics, [])
+
+    def test_align_text_grounded_event_drops_ambiguous_or_missing_text_fields(self) -> None:
+        aligned, issues, diagnostics = align_text_grounded_event(
+            {
+                "event_type": "Conflict:Attack",
+                "trigger": {"text": "market", "modality": "text", "span": {"start": 1, "end": 2}},
+                "text_arguments": [{"role": "Place", "text": "market", "span": None}],
+                "image_arguments": [],
+            },
+            "market north market south",
+        )
+
+        self.assertIsNone(aligned["trigger"])
+        self.assertEqual(aligned["text_arguments"], [])
+        self.assertEqual(len(issues), 2)
+        self.assertTrue(any(x["field_path"] == "trigger.span" for x in diagnostics))
+        self.assertTrue(any(x["field_path"] == "text_arguments[0].span" for x in diagnostics))
 
     def test_strict_text_grounding_removes_null_span_text_fields(self) -> None:
         grounded = enforce_strict_text_grounding(
@@ -1375,16 +1646,16 @@ class SmokeTests(unittest.TestCase):
             "A bomb exploded in a market",
         )
 
-        self.assertEqual(grounded["trigger"]["span"], {"start": 7, "end": 15})
-        self.assertEqual(grounded["text_arguments"], [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}])
+        self.assertEqual(grounded["trigger"]["span"], {"start": 2, "end": 3})
+        self.assertEqual(grounded["text_arguments"], [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}])
 
     def test_repair_drops_text_argument_when_exact_alignment_fails(self) -> None:
         state = make_state()
         state["text"] = "A bomb exploded in a market"
         state["event"] = {
             "event_type": "Conflict:Attack",
-            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 7, "end": 15}},
-            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
             "image_arguments": [],
         }
         state["verifier_diagnostics"] = [
@@ -1414,22 +1685,22 @@ class SmokeTests(unittest.TestCase):
         normalized = validate_event(
             {
                 "event_type": "Conflict:Attack",
-                "trigger": {"text": "exploded", "modality": "text", "span": [7, 15]},
-                "text_arguments": [{"role": "Place", "text": "market", "span": [21, 27]}],
+                "trigger": {"text": "exploded", "modality": "text", "span": [2, 3]},
+                "text_arguments": [{"role": "Place", "text": "market", "span": [5, 6]}],
                 "image_arguments": [],
             }
         )
 
-        self.assertEqual(normalized["trigger"]["span"], {"start": 7, "end": 15})
-        self.assertEqual(normalized["text_arguments"][0]["span"], {"start": 21, "end": 27})
+        self.assertEqual(normalized["trigger"]["span"], {"start": 2, "end": 3})
+        self.assertEqual(normalized["text_arguments"][0]["span"], {"start": 5, "end": 6})
 
     def test_repair_only_trigger_span_diagnosed_preserves_non_trigger_fields(self) -> None:
         state = make_state()
         state["text"] = "A bomb exploded in a market"
         state["event"] = {
             "event_type": "Conflict:Attack",
-            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 4}},
-            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 1}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
             "image_arguments": [{"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}],
         }
         state["verifier_diagnostics"] = [
@@ -1447,7 +1718,7 @@ class SmokeTests(unittest.TestCase):
         ):
             result = repair(state)
 
-        self.assertEqual(result["event"]["trigger"]["span"], {"start": 7, "end": 15})
+        self.assertEqual(result["event"]["trigger"]["span"], {"start": 2, "end": 3})
         self.assertEqual(result["event"]["event_type"], state["event"]["event_type"])
         self.assertEqual(result["event"]["text_arguments"], state["event"]["text_arguments"])
         self.assertEqual(result["event"]["image_arguments"], state["event"]["image_arguments"])
@@ -1457,10 +1728,10 @@ class SmokeTests(unittest.TestCase):
         state["text"] = "A civilian died from shrapnel in the market"
         state["event"] = {
             "event_type": "Life:Die",
-            "trigger": {"text": "died", "modality": "text", "span": {"start": 11, "end": 15}},
+            "trigger": {"text": "died", "modality": "text", "span": {"start": 2, "end": 3}},
             "text_arguments": [
-                {"role": "Victim", "text": "civilian", "span": {"start": 0, "end": 8}},
-                {"role": "Instrument", "text": "shrapnel", "span": {"start": 21, "end": 29}},
+                {"role": "Victim", "text": "civilian", "span": {"start": 0, "end": 1}},
+                {"role": "Instrument", "text": "shrapnel", "span": {"start": 4, "end": 5}},
             ],
             "image_arguments": [],
         }
@@ -1483,10 +1754,10 @@ class SmokeTests(unittest.TestCase):
         ):
             result = repair(state)
 
-        self.assertEqual(result["event"]["text_arguments"][0]["span"], {"start": 2, "end": 10})
+        self.assertEqual(result["event"]["text_arguments"][0]["span"], {"start": 1, "end": 2})
         self.assertEqual(result["event"]["text_arguments"][1]["role"], state["event"]["text_arguments"][1]["role"])
         self.assertEqual(result["event"]["text_arguments"][1]["text"], state["event"]["text_arguments"][1]["text"])
-        self.assertEqual(result["event"]["text_arguments"][1]["span"], {"start": 21, "end": 29})
+        self.assertEqual(result["event"]["text_arguments"][1]["span"], {"start": 4, "end": 5})
         self.assertEqual(result["event"]["trigger"], state["event"]["trigger"])
         self.assertEqual(result["event"]["event_type"], state["event"]["event_type"])
 
@@ -1495,7 +1766,7 @@ class SmokeTests(unittest.TestCase):
         state["event"] = {
             "event_type": "Conflict:Attack",
             "trigger": None,
-            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
             "image_arguments": [
                 {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"},
                 {"role": "Target", "label": "market stall", "bbox": [2, 2, 3, 3], "grounding_status": "grounded"},
@@ -1530,8 +1801,8 @@ class SmokeTests(unittest.TestCase):
         state["text"] = "A bomb exploded in a market"
         state["event"] = {
             "event_type": "Conflict:Attack",
-            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 4}},
-            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 1}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
             "image_arguments": [{"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}],
         }
         state["verifier_diagnostics"] = [
@@ -1569,7 +1840,7 @@ class SmokeTests(unittest.TestCase):
         state["event"] = {
             "event_type": "Conflict:Attack",
             "trigger": None,
-            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
             "image_arguments": [
                 {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}
             ],
@@ -1613,8 +1884,8 @@ class SmokeTests(unittest.TestCase):
         state["text"] = "A bomb exploded in a market"
         state["event"] = {
             "event_type": "Conflict:Attack",
-            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 4}},
-            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 1}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
             "image_arguments": [
                 {"role": "Place", "label": "market area", "bbox": [5.0, 6.0, 20.0, 22.0], "grounding_status": "grounded"}
             ],
@@ -1644,7 +1915,7 @@ class SmokeTests(unittest.TestCase):
         ):
             result = repair(state)
 
-        self.assertEqual(result["event"]["trigger"]["span"], {"start": 7, "end": 15})
+        self.assertEqual(result["event"]["trigger"]["span"], {"start": 2, "end": 3})
         self.assertEqual(result["event"]["image_arguments"][0]["bbox"], [5.0, 6.0, 20.0, 22.0])
         self.assertEqual(result["event"]["image_arguments"][0]["grounding_status"], "grounded")
         self.assertEqual(result["event"]["event_type"], state["event"]["event_type"])
@@ -1654,7 +1925,7 @@ class SmokeTests(unittest.TestCase):
         state["event"] = {
             "event_type": "Conflict:Attack",
             "trigger": None,
-            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 21, "end": 27}}],
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
             "image_arguments": [
                 {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}
             ],
@@ -1693,6 +1964,34 @@ class SmokeTests(unittest.TestCase):
             {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"},
         )
         self.assertEqual(result["event"]["event_type"], state["event"]["event_type"])
+
+    def test_repair_does_not_reintroduce_image_arguments_in_text_only_mode(self) -> None:
+        state = make_state()
+        state["raw_image"] = None
+        state["image_desc"] = ""
+        state["perception_summary"] = "Text: A bomb exploded in a market\nImage: "
+        state["event"] = {
+            "event_type": "Conflict:Attack",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 0, "end": 1}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
+            "image_arguments": [],
+        }
+        state["verifier_diagnostics"] = [
+            {"field_path": "trigger.span", "issue_type": "span_mismatch", "suggested_action": "realign_or_drop"}
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.repair._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack","trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[{"role":"Place","text":"market","span":null}],"image_arguments":[{"role":"Place","label":"market area","bbox":null,"grounding_status":"unresolved"}]}'
+                ]
+            ),
+        ):
+            result = repair(state)
+
+        self.assertEqual(result["event"]["trigger"]["span"], {"start": 2, "end": 3})
+        self.assertEqual(result["event"]["image_arguments"], [])
 
     def test_extraction_rejects_unsupported_closed_set_event_type(self) -> None:
         state = make_state()
@@ -1780,6 +2079,85 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("prefer omission over unsupported image-role prediction", prompt)
         self.assertIn("Do not output a weakly visible role just because it is semantically allowed", prompt)
 
+    def test_stage_c_directly_attaches_raw_image_and_auxiliary_context(self) -> None:
+        stage_c_llm = RecordingLLM(
+            '{"image_arguments":[{"role":"Place","label":"market area","bbox":null,"grounding_status":"unresolved"}]}'
+        )
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=stage_c_llm,
+        ):
+            from mm_event_agent.nodes.extraction import _stage_c_extract_image_arguments
+
+            result = _stage_c_extract_image_arguments(
+                "Conflict:Attack",
+                "raw_image_desc: smoke near market\nperception_summary: people running from a blast",
+                [{"role": "Place", "text": "market", "span": None}],
+                empty_layered_similar_events(),
+                [],
+                raw_image=b"fake-image-bytes",
+                raw_text="A bomb exploded in a market",
+            )
+
+        self.assertEqual(
+            result,
+            [{"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}],
+        )
+        self.assertTrue(stage_c_llm.contents)
+        self.assertIsInstance(stage_c_llm.contents[0], list)
+        self.assertEqual(stage_c_llm.contents[0][1]["type"], "image_url")
+        prompt = stage_c_llm.contents[0][0]["text"]
+        self.assertIn('"raw_text": "A bomb exploded in a market"', prompt)
+        self.assertIn("raw_image is the primary visual evidence for this stage.", prompt)
+        self.assertIn("Treat image_side_info as auxiliary context", prompt)
+
+    def test_stage_c_text_only_fallback_still_works_without_raw_image(self) -> None:
+        stage_c_llm = RecordingLLM('{"image_arguments":[]}')
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=stage_c_llm,
+        ):
+            from mm_event_agent.nodes.extraction import _stage_c_extract_image_arguments
+
+            result = _stage_c_extract_image_arguments(
+                "Conflict:Attack",
+                "raw_image_desc: smoke near market\nperception_summary: summary",
+                [],
+                empty_layered_similar_events(),
+                [],
+                raw_image=None,
+                raw_text="A bomb exploded in a market",
+            )
+
+        self.assertEqual(result, [])
+        self.assertIsInstance(stage_c_llm.contents[0], str)
+        self.assertIn('"raw_text": "A bomb exploded in a market"', stage_c_llm.contents[0])
+
+    def test_stage_c_does_not_depend_only_on_image_desc_when_raw_image_exists(self) -> None:
+        stage_c_llm = RecordingLLM('{"image_arguments":[]}')
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=stage_c_llm,
+        ):
+            from mm_event_agent.nodes.extraction import _stage_c_extract_image_arguments
+
+            _stage_c_extract_image_arguments(
+                "Conflict:Attack",
+                "",
+                [],
+                empty_layered_similar_events(),
+                [],
+                raw_image=b"fake-image-bytes",
+                raw_text="A bomb exploded in a market",
+            )
+
+        self.assertIsInstance(stage_c_llm.contents[0], list)
+        self.assertEqual(stage_c_llm.contents[0][1]["type"], "image_url")
+        self.assertIn('"image_side_info": ""', stage_c_llm.contents[0][0]["text"])
+
     def test_stage_c_prompt_still_allows_clearly_visible_roles(self) -> None:
         stage_c_llm = RecordingLLM(
             '{"image_arguments":[{"role":"Place","label":"market area","bbox":null,"grounding_status":"unresolved"}]}'
@@ -1866,6 +2244,66 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("Bridge 1", prompt)
         self.assertIn("Use image semantic examples as visual pattern guidance.", prompt)
         self.assertIn("Use bridge hints to connect text roles and visual cues.", prompt)
+
+    def test_extraction_output_contract_stays_stable_with_multimodal_stage_c(self) -> None:
+        state = make_state()
+        state["raw_image"] = b"fake-image-bytes"
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "Text: A bomb exploded in a market\nImage: smoke near market stalls",
+            "patterns": empty_layered_similar_events(),
+            "evidence": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack"}',
+                    '{"trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[{"role":"Place","text":"market","span":null}]}',
+                    '{"image_arguments":[{"role":"Place","label":"market area","bbox":null,"grounding_status":"unresolved"}]}',
+                ]
+            ),
+        ):
+            result = extraction(state)
+
+        self.assertEqual(set(result.keys()), {"event", "grounding_results"})
+        self.assertEqual(
+            set(result["event"].keys()),
+            {"event_type", "trigger", "text_arguments", "image_arguments"},
+        )
+        self.assertEqual(result["event"]["event_type"], "Conflict:Attack")
+
+    def test_text_only_extraction_forces_empty_image_arguments_and_skips_stage_c(self) -> None:
+        state = make_state()
+        state["raw_image"] = None
+        state["image_desc"] = ""
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": "",
+            "perception_summary": "Text: A bomb exploded in a market\nImage: ",
+            "patterns": empty_layered_similar_events(),
+            "evidence": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack"}',
+                    '{"trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[{"role":"Place","text":"market","span":null}]}',
+                ]
+            ),
+        ), patch("mm_event_agent.nodes.extraction._stage_c_extract_image_arguments") as mock_stage_c, patch(
+            "mm_event_agent.nodes.extraction.execute_grounding_requests"
+        ) as mock_grounding:
+            result = extraction(state)
+
+        self.assertFalse(mock_stage_c.called)
+        self.assertFalse(mock_grounding.called)
+        self.assertEqual(result["event"]["image_arguments"], [])
+        self.assertEqual(result["grounding_results"], [])
 
     def test_transfer_mode_allows_unsupported(self) -> None:
         state = make_state()
@@ -1964,8 +2402,8 @@ class SmokeTests(unittest.TestCase):
         valid = validate_event(
             {
                 "event_type": "Conflict:Attack",
-                "trigger": {"text": "exploded", "modality": "text", "span": [7, 15]},
-                "text_arguments": [{"role": "Place", "text": "market", "span": [21, 27]}],
+                "trigger": {"text": "exploded", "modality": "text", "span": [2, 3]},
+                "text_arguments": [{"role": "Place", "text": "market", "span": [5, 6]}],
                 "image_arguments": [
                     {"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}
                 ],
@@ -2270,6 +2708,354 @@ class SmokeTests(unittest.TestCase):
         self.assertIsInstance(results[0]["bbox"], list)
         self.assertEqual(len(results[0]["bbox"]), 4)
         self.assertIsInstance(results[0]["score"], float)
+
+    def test_grounding_executor_phrase_grounding_parsed_format_returns_first_bbox(self) -> None:
+        grounder = Florence2HFGrounder(task_prompt="<CAPTION_TO_PHRASE_GROUNDING>")
+
+        bbox, score = grounder._extract_best_grounding(
+            {
+                "<CAPTION_TO_PHRASE_GROUNDING>": {
+                    "bboxes": [[1, 2, 10, 12], [4, 5, 6, 7]],
+                    "labels": ["helicopter", "cargo net"],
+                }
+            }
+        )
+
+        self.assertEqual(bbox, [1.0, 2.0, 10.0, 12.0])
+        self.assertIsNone(score)
+
+    def test_grounding_executor_prepare_inputs_casts_only_pixel_values_to_float16_on_gpu(self) -> None:
+        class FakeTensor:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.device_moves: list[str] = []
+                self.dtype_moves: list[object] = []
+
+            def to(self, device=None, dtype=None):
+                if device is not None:
+                    self.device_moves.append(device)
+                if dtype is not None:
+                    self.dtype_moves.append(dtype)
+                return self
+
+        grounder = Florence2HFGrounder(device="cuda:0")
+        grounder._torch = SimpleNamespace(float16="float16")
+        input_ids = FakeTensor("input_ids")
+        pixel_values = FakeTensor("pixel_values")
+
+        prepared = grounder._prepare_inputs(
+            {
+                "input_ids": input_ids,
+                "pixel_values": pixel_values,
+                "attention_mask": FakeTensor("attention_mask"),
+            }
+        )
+
+        self.assertIs(prepared["input_ids"], input_ids)
+        self.assertEqual(input_ids.device_moves, ["cuda:0"])
+        self.assertEqual(input_ids.dtype_moves, [])
+        self.assertIs(prepared["pixel_values"], pixel_values)
+        self.assertEqual(pixel_values.device_moves, ["cuda:0"])
+        self.assertEqual(pixel_values.dtype_moves, ["float16"])
+
+    def test_grounding_executor_run_single_request_extracts_bbox_without_score(self) -> None:
+        class FakeProcessor:
+            def __call__(self, text, images, return_tensors):
+                return {
+                    "input_ids": FakeTensor("input_ids"),
+                    "pixel_values": FakeTensor("pixel_values"),
+                }
+
+            def batch_decode(self, generated_ids, skip_special_tokens=False):
+                return ["decoded"]
+
+            def post_process_generation(self, generated_text, task, image_size):
+                return {
+                    "<CAPTION_TO_PHRASE_GROUNDING>": {
+                        "bboxes": [[5, 6, 20, 22]],
+                        "labels": ["helicopter"],
+                    }
+                }
+
+        class FakeModel:
+            def generate(self, **kwargs):
+                return [[1, 2, 3]]
+
+        class FakeTensor:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            def to(self, device=None, dtype=None):
+                return self
+
+        grounder = Florence2HFGrounder(task_prompt="<CAPTION_TO_PHRASE_GROUNDING>", device="cuda:0")
+        grounder._processor = FakeProcessor()
+        grounder._model = FakeModel()
+        grounder._torch = SimpleNamespace(float16="float16")
+
+        image = SimpleNamespace(width=640, height=480)
+        request = {
+            "role": "Instrument",
+            "label": "helicopter",
+            "grounding_query": "helicopter",
+            "grounding_status": "unresolved",
+        }
+
+        result = grounder._run_single_request(image, request)
+
+        self.assertEqual(result["bbox"], [5.0, 6.0, 20.0, 22.0])
+        self.assertIsNone(result["score"])
+        self.assertEqual(result["grounding_status"], "grounded")
+
+    def test_grounding_executor_query_fallback_tries_label_then_optional_phrase(self) -> None:
+        grounder = Florence2HFGrounder(task_prompt="<CAPTION_TO_PHRASE_GROUNDING>", device="cpu")
+        grounder._processor = object()
+        grounder._model = object()
+        grounder._torch = object()
+        seen_queries: list[str] = []
+
+        def fake_run_phrase_query(image, query):
+            seen_queries.append(query)
+            if query == "suspended cargo net":
+                return [9.0, 10.0, 30.0, 40.0], None
+            return None, None
+
+        with patch.object(Florence2HFGrounder, "_run_phrase_query", side_effect=fake_run_phrase_query):
+            result = grounder._run_single_request(
+                SimpleNamespace(width=640, height=480),
+                {
+                    "role": "Artifact",
+                    "label": "cargo net",
+                    "grounding_query": "suspended cargo net",
+                    "grounding_status": "unresolved",
+                },
+            )
+
+        self.assertEqual(seen_queries, ["cargo net", "suspended cargo net"])
+        self.assertEqual(result["bbox"], [9.0, 10.0, 30.0, 40.0])
+        self.assertEqual(result["grounding_status"], "grounded")
+
+    def test_grounding_executor_query_fallback_supports_pipe_separated_candidates(self) -> None:
+        grounder = Florence2HFGrounder(task_prompt="<CAPTION_TO_PHRASE_GROUNDING>", device="cpu")
+
+        candidates = grounder._build_candidate_queries(
+            {
+                "role": "Artifact",
+                "label": "cargo net",
+                "grounding_query": "Artifact: cargo net || suspended cargo net || hanging cargo net",
+                "grounding_status": "unresolved",
+            }
+        )
+
+        self.assertEqual(candidates, ["cargo net", "Artifact: cargo net", "suspended cargo net"])
+
+    def test_grounding_service_payload_uses_absolute_local_image_path(self) -> None:
+        payload = build_grounding_service_payload(
+            raw_image="tests",
+            grounding_requests=[
+                {
+                    "role": "Vehicle",
+                    "label": "helicopter",
+                    "grounding_query": "helicopter",
+                    "grounding_status": "unresolved",
+                }
+            ],
+            task="<CAPTION_TO_PHRASE_GROUNDING>",
+        )
+
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertTrue(os.path.isabs(payload["raw_image"]))
+        self.assertEqual(payload["task"], "<CAPTION_TO_PHRASE_GROUNDING>")
+        self.assertEqual(payload["grounding_requests"][0]["grounding_query"], "helicopter")
+
+    def test_grounding_service_response_is_normalized_to_existing_contract(self) -> None:
+        results = parse_grounding_service_response(
+            {
+                "results": [
+                    {
+                        "role": "Vehicle",
+                        "label": "helicopter",
+                        "grounding_query": "helicopter",
+                        "bbox": [1, 2, 10, 12],
+                        "score": None,
+                        "grounding_status": "grounded",
+                    }
+                ]
+            },
+            [
+                {
+                    "role": "Vehicle",
+                    "label": "helicopter",
+                    "grounding_query": "helicopter",
+                    "grounding_status": "unresolved",
+                }
+            ],
+        )
+
+        self.assertEqual(
+            results,
+            [
+                {
+                    "role": "Vehicle",
+                    "label": "helicopter",
+                    "grounding_query": "helicopter",
+                    "bbox": [1.0, 2.0, 10.0, 12.0],
+                    "score": None,
+                    "grounding_status": "grounded",
+                }
+            ],
+        )
+
+    def test_grounding_executor_prefers_service_endpoint_when_configured(self) -> None:
+        requests = [
+            {
+                "role": "Vehicle",
+                "label": "helicopter",
+                "grounding_query": "helicopter",
+                "grounding_status": "unresolved",
+            }
+        ]
+        service_settings = replace(
+            grounding_module.settings,
+            florence2_local_endpoint="http://127.0.0.1:8765/ground",
+        )
+
+        with patch.object(grounding_module, "settings", service_settings), patch.object(
+            Florence2ServiceGrounder,
+            "execute",
+            return_value=[
+                {
+                    "role": "Vehicle",
+                    "label": "helicopter",
+                    "grounding_query": "helicopter",
+                    "bbox": [1.0, 2.0, 10.0, 12.0],
+                    "score": None,
+                    "grounding_status": "grounded",
+                }
+            ],
+        ) as mock_service_execute, patch.object(
+            Florence2HFGrounder,
+            "execute",
+            side_effect=AssertionError("local fallback should not be used"),
+        ):
+            results = execute_grounding_requests("tests", requests)
+
+        self.assertEqual(results[0]["grounding_status"], "grounded")
+        self.assertTrue(mock_service_execute.called)
+
+    def test_grounding_service_endpoint_failure_returns_safe_failed_results(self) -> None:
+        requests = [
+            {
+                "role": "Vehicle",
+                "label": "helicopter",
+                "grounding_query": "helicopter",
+                "grounding_status": "unresolved",
+            }
+        ]
+        service_settings = replace(
+            grounding_module.settings,
+            florence2_local_endpoint="http://127.0.0.1:8765/ground",
+            florence2_local_timeout_seconds=1.5,
+        )
+
+        with patch.object(grounding_module, "settings", service_settings), patch(
+            "urllib.request.urlopen",
+            side_effect=OSError("connection refused"),
+        ), patch.object(
+            Florence2HFGrounder,
+            "_ensure_model_loaded",
+            side_effect=AssertionError("local fallback should not be loaded"),
+        ):
+            results = execute_grounding_requests("tests", requests)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["grounding_status"], "failed")
+        self.assertIsNone(results[0]["bbox"])
+
+    def test_extraction_grounding_contract_is_unchanged_with_service_results(self) -> None:
+        state = make_state()
+        state["raw_image"] = b"fake-image-bytes"
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack"}',
+                    '{"trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[{"role":"Place","text":"market","span":null}]}',
+                    '{"image_arguments":[{"role":"Place","label":"market area","bbox":null,"grounding_status":"unresolved"}]}',
+                ]
+            ),
+        ), patch(
+            "mm_event_agent.nodes.extraction.execute_grounding_requests",
+            return_value=[
+                {
+                    "role": "Place",
+                    "label": "market area",
+                    "grounding_query": "Place: market area",
+                    "bbox": [1.0, 2.0, 11.0, 12.0],
+                    "score": None,
+                    "grounding_status": "grounded",
+                }
+            ],
+        ):
+            result = extraction(state)
+
+        self.assertEqual(result["event"]["image_arguments"][0]["bbox"], [1.0, 2.0, 11.0, 12.0])
+        self.assertEqual(result["event"]["image_arguments"][0]["grounding_status"], "grounded")
+
+    def test_grounding_executor_run_single_request_safe_fails_when_phrase_grounding_has_no_bbox(self) -> None:
+        class FakeProcessor:
+            def __call__(self, text, images, return_tensors):
+                return {
+                    "input_ids": FakeTensor(),
+                    "pixel_values": FakeTensor(),
+                }
+
+            def batch_decode(self, generated_ids, skip_special_tokens=False):
+                return ["decoded"]
+
+            def post_process_generation(self, generated_text, task, image_size):
+                return {
+                    "<CAPTION_TO_PHRASE_GROUNDING>": {
+                        "bboxes": [],
+                        "labels": [],
+                    }
+                }
+
+        class FakeModel:
+            def generate(self, **kwargs):
+                return [[1, 2, 3]]
+
+        class FakeTensor:
+            def to(self, device=None, dtype=None):
+                return self
+
+        grounder = Florence2HFGrounder(task_prompt="<CAPTION_TO_PHRASE_GROUNDING>", device="cpu")
+        grounder._processor = FakeProcessor()
+        grounder._model = FakeModel()
+        grounder._torch = SimpleNamespace(float16="float16")
+
+        image = SimpleNamespace(width=640, height=480)
+        request = {
+            "role": "Instrument",
+            "label": "helicopter",
+            "grounding_query": "helicopter",
+            "grounding_status": "unresolved",
+        }
+
+        result = grounder._run_single_request(image, request)
+
+        self.assertIsNone(result["bbox"])
+        self.assertIsNone(result["score"])
+        self.assertEqual(result["grounding_status"], "failed")
 
     def test_apply_grounding_results_to_event_is_future_facing_write_back_helper(self) -> None:
         event = {
