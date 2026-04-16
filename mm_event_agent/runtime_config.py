@@ -68,6 +68,10 @@ class Settings:
     rag_use_persistent_index: bool
     rag_use_demo_corpus: bool
     rag_index_root: str
+    rag_qwen_model_path: str
+    rag_qwen_device: str
+    rag_qwen_dtype: str
+    rag_qwen_attn_impl: str
     rag_text_encoder_model: str
     rag_text_encoder_model_path: str
     rag_qwen_embedding_model_path: str
@@ -115,12 +119,46 @@ def load_settings() -> Settings:
         rag_use_persistent_index=_env_flag("MM_EVENT_RAG_USE_PERSISTENT_INDEX", False),
         rag_use_demo_corpus=_env_flag("MM_EVENT_RAG_USE_DEMO_CORPUS", True),
         rag_index_root=_env_str("MM_EVENT_RAG_INDEX_ROOT", "data/rag/indexes") or "data/rag/indexes",
+        rag_qwen_model_path=_env_str(
+            "MM_EVENT_RAG_QWEN_MODEL_PATH",
+            _env_str("MM_EVENT_RAG_QWEN_EMBEDDING_MODEL_PATH", ""),
+        ),
+        rag_qwen_device=_env_str(
+            "MM_EVENT_RAG_QWEN_DEVICE",
+            _env_str("MM_EVENT_RAG_QWEN_EMBEDDING_DEVICE", "cuda:0"),
+        )
+        or "cuda:0",
+        rag_qwen_dtype=_env_str(
+            "MM_EVENT_RAG_QWEN_DTYPE",
+            _env_str("MM_EVENT_RAG_QWEN_EMBEDDING_DTYPE", "bfloat16"),
+        )
+        or "bfloat16",
+        rag_qwen_attn_impl=_env_str(
+            "MM_EVENT_RAG_QWEN_ATTN_IMPL",
+            _env_str("MM_EVENT_RAG_QWEN_EMBEDDING_ATTN_IMPL", "sdpa"),
+        )
+        or "sdpa",
         rag_text_encoder_model=_env_str("MM_EVENT_RAG_TEXT_ENCODER_MODEL", "sentence-transformers/all-MiniLM-L6-v2") or "sentence-transformers/all-MiniLM-L6-v2",
         rag_text_encoder_model_path=_env_str("MM_EVENT_RAG_TEXT_ENCODER_MODEL_PATH", ""),
-        rag_qwen_embedding_model_path=_env_str("MM_EVENT_RAG_QWEN_EMBEDDING_MODEL_PATH", ""),
-        rag_qwen_embedding_device=_env_str("MM_EVENT_RAG_QWEN_EMBEDDING_DEVICE", "cuda:0") or "cuda:0",
-        rag_qwen_embedding_dtype=_env_str("MM_EVENT_RAG_QWEN_EMBEDDING_DTYPE", "bfloat16") or "bfloat16",
-        rag_qwen_embedding_attn_impl=_env_str("MM_EVENT_RAG_QWEN_EMBEDDING_ATTN_IMPL", "sdpa") or "sdpa",
+        rag_qwen_embedding_model_path=_env_str(
+            "MM_EVENT_RAG_QWEN_EMBEDDING_MODEL_PATH",
+            _env_str("MM_EVENT_RAG_QWEN_MODEL_PATH", ""),
+        ),
+        rag_qwen_embedding_device=_env_str(
+            "MM_EVENT_RAG_QWEN_EMBEDDING_DEVICE",
+            _env_str("MM_EVENT_RAG_QWEN_DEVICE", "cuda:0"),
+        )
+        or "cuda:0",
+        rag_qwen_embedding_dtype=_env_str(
+            "MM_EVENT_RAG_QWEN_EMBEDDING_DTYPE",
+            _env_str("MM_EVENT_RAG_QWEN_DTYPE", "bfloat16"),
+        )
+        or "bfloat16",
+        rag_qwen_embedding_attn_impl=_env_str(
+            "MM_EVENT_RAG_QWEN_EMBEDDING_ATTN_IMPL",
+            _env_str("MM_EVENT_RAG_QWEN_ATTN_IMPL", "sdpa"),
+        )
+        or "sdpa",
         rag_qwen_text_instruction=_env_str(
             "MM_EVENT_RAG_QWEN_TEXT_INSTRUCTION",
             "Retrieve text relevant to the user's query.",

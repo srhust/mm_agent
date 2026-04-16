@@ -26,18 +26,26 @@ class RagStoreRegistry:
         bridge_dir: str | Path | None = None,
     ) -> None:
         self._index_root = Path(index_root or settings.rag_index_root)
-        encoder_source = settings.rag_qwen_embedding_model_path or settings.rag_text_encoder_model_path
+        encoder_source = (
+            settings.rag_qwen_model_path
+            or settings.rag_qwen_embedding_model_path
+            or settings.rag_text_encoder_model_path
+        )
         self._encoder = encoder or Qwen3VLTextEncoder(
             model_path=encoder_source,
-            device=settings.rag_qwen_embedding_device,
-            dtype=settings.rag_qwen_embedding_dtype,
-            attn_impl=settings.rag_qwen_embedding_attn_impl,
+            device=settings.rag_qwen_device or settings.rag_qwen_embedding_device,
+            dtype=settings.rag_qwen_dtype or settings.rag_qwen_embedding_dtype,
+            attn_impl=settings.rag_qwen_attn_impl or settings.rag_qwen_embedding_attn_impl,
             instruction=settings.rag_qwen_text_instruction,
             out_dim=settings.rag_qwen_embedding_out_dim,
             normalize=settings.rag_qwen_embedding_normalize,
         )
         self._image_encoder = image_encoder
-        self._image_encoder_source = settings.rag_image_encoder_model_path or settings.rag_qwen_embedding_model_path
+        self._image_encoder_source = (
+            settings.rag_image_encoder_model_path
+            or settings.rag_qwen_model_path
+            or settings.rag_qwen_embedding_model_path
+        )
         self._indexes: dict[str, PersistentFaissIndex] = {}
 
         configured_paths = {
@@ -50,6 +58,9 @@ class RagStoreRegistry:
         for name, path in configured_paths.items():
             if path.exists():
                 self._indexes[name] = PersistentFaissIndex.load(path)
+
+    def available_index_names(self) -> set[str]:
+        return set(self._indexes)
 
     def retrieve_text_examples(self, query: str, top_k: int, *, event_type: str = "") -> list[dict[str, Any]]:
         indexes = [name for name in ["ace_text", "maven_text"] if name in self._indexes]
@@ -97,9 +108,9 @@ class RagStoreRegistry:
         if self._image_encoder is None:
             self._image_encoder = Qwen3VLImageEncoder(
                 model_path=self._image_encoder_source,
-                device=settings.rag_qwen_embedding_device,
-                dtype=settings.rag_qwen_embedding_dtype,
-                attn_impl=settings.rag_qwen_embedding_attn_impl,
+                device=settings.rag_qwen_device or settings.rag_qwen_embedding_device,
+                dtype=settings.rag_qwen_dtype or settings.rag_qwen_embedding_dtype,
+                attn_impl=settings.rag_qwen_attn_impl or settings.rag_qwen_embedding_attn_impl,
                 instruction=settings.rag_qwen_image_instruction,
                 out_dim=settings.rag_qwen_embedding_out_dim,
                 normalize=settings.rag_qwen_embedding_normalize,

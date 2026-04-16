@@ -3,26 +3,40 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Sequence
+from pathlib import Path
+from typing import Any, Callable, Sequence
 
-import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
+from mm_event_agent.runtime_config import settings
 from mm_event_agent.schemas import LayeredSimilarEvents, empty_layered_similar_events
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+
+try:  # pragma: no cover - dependency availability varies by environment
+    import faiss
+except ImportError:  # pragma: no cover - dependency availability varies by environment
+    faiss = None
+
+try:  # pragma: no cover - dependency availability varies by environment
+    from sentence_transformers import SentenceTransformer
+except ImportError:  # pragma: no cover - dependency availability varies by environment
+    SentenceTransformer = None
 
 
 class InMemoryFaissCollection:
     def __init__(self, model_name: str = MODEL_NAME) -> None:
         self._model_name = model_name
-        self._model: SentenceTransformer | None = None
+        self._model: Any | None = None
         self._index: faiss.Index | None = None
         self._docs: list[dict[str, Any]] = []
 
     def _encode(self, texts: Sequence[str]) -> np.ndarray:
+        if faiss is None:
+            raise ImportError("faiss is required to use the demo in-memory RAG path")
         if self._model is None:
+            if SentenceTransformer is None:
+                raise ImportError("sentence-transformers is required to use the demo in-memory RAG path")
             self._model = SentenceTransformer(self._model_name)
         emb = self._model.encode(list(texts), convert_to_numpy=True, show_progress_bar=False)
         out = np.asarray(emb, dtype=np.float32)
@@ -54,10 +68,12 @@ class InMemoryFaissCollection:
 
 
 class LayeredRagStore:
-    def __init__(self) -> None:
+    def __init__(self, persistent_registry_factory: Callable[[], Any] | None = None) -> None:
         self._text_store = InMemoryFaissCollection()
         self._image_store = InMemoryFaissCollection()
         self._bridge_store = InMemoryFaissCollection()
+        self._persistent_registry_factory = persistent_registry_factory
+        self._persistent_registry: Any | None = None
 
     def build_index(self, corpora: dict[str, Sequence[dict[str, Any]]] | None) -> None:
         layered = _normalize_corpora(corpora)
@@ -71,6 +87,30 @@ class LayeredRagStore:
         image_desc: str = "",
         event_type: str = "",
         top_k: int = 3,
+        *,
+        raw_image: Any | None = None,
+    ) -> LayeredSimilarEvents:
+        if settings.rag_use_persistent_index:
+            persistent_results = self._retrieve_persistent(
+                raw_text=raw_text,
+                image_desc=image_desc,
+                event_type=event_type,
+                top_k=top_k,
+                raw_image=raw_image,
+            )
+            if persistent_results is not None:
+                return persistent_results
+            if not settings.rag_use_demo_corpus:
+                return empty_layered_similar_events()
+        return self._retrieve_demo(raw_text=raw_text, image_desc=image_desc, event_type=event_type, top_k=top_k)
+
+    def _retrieve_demo(
+        self,
+        *,
+        raw_text: str,
+        image_desc: str,
+        event_type: str,
+        top_k: int,
     ) -> LayeredSimilarEvents:
         normalized_raw_text = str(raw_text or "").strip()
         normalized_image_desc = str(image_desc or "").strip()
@@ -97,6 +137,106 @@ class LayeredRagStore:
             "image_semantic_examples": self._image_store.retrieve(image_query or primary_query, top_k=top_k),
             "bridge_examples": self._bridge_store.retrieve(bridge_query or primary_query, top_k=top_k, filter_fn=_bridge_filter),
         }
+
+    def _retrieve_persistent(
+        self,
+        *,
+        raw_text: str,
+        image_desc: str,
+        event_type: str,
+        top_k: int,
+        raw_image: Any | None,
+    ) -> LayeredSimilarEvents | None:
+        registry = self._get_persistent_registry()
+        if registry is None:
+            return None
+        available_index_names = set(getattr(registry, "available_index_names", lambda: set())())
+        if not available_index_names:
+            return None
+
+        normalized_raw_text = str(raw_text or "").strip()
+        normalized_image_desc = str(image_desc or "").strip()
+        normalized_event_type = str(event_type or "").strip()
+        if not normalized_raw_text and not normalized_image_desc and not normalized_event_type and raw_image is None:
+            return empty_layered_similar_events()
+
+        effective_top_k = max(1, int(top_k or settings.rag_default_top_k))
+        text_top_k = max(1, int(settings.rag_text_top_k or effective_top_k))
+        image_top_k = max(1, int(settings.rag_image_top_k or effective_top_k))
+        bridge_top_k = max(1, int(settings.rag_bridge_top_k or effective_top_k))
+
+        primary_query = normalized_raw_text or normalized_event_type or normalized_image_desc
+        image_text_query = " ".join(
+            part for part in [normalized_raw_text, normalized_image_desc, normalized_event_type] if part
+        ).strip()
+        bridge_query = " ".join(
+            part for part in [normalized_event_type, normalized_raw_text, normalized_image_desc] if part
+        ).strip()
+
+        text_examples = registry.retrieve_text_examples(
+            primary_query,
+            top_k=text_top_k,
+            event_type=normalized_event_type,
+        ) if primary_query else []
+
+        image_examples: list[dict[str, Any]] = []
+        if image_text_query and "swig_text" in available_index_names:
+            image_examples.extend(
+                registry.retrieve_swig_text_examples(
+                    image_text_query,
+                    top_k=image_top_k,
+                    event_type=normalized_event_type,
+                )
+            )
+        image_query_path = _extract_image_query_path(raw_image)
+        if (
+            settings.rag_enable_image_query
+            and image_query_path
+            and "swig_image" in available_index_names
+        ):
+            image_examples.extend(
+                registry.retrieve_swig_image_examples(
+                    raw_image=raw_image,
+                    image_path=image_query_path,
+                    top_k=image_top_k,
+                    event_type=normalized_event_type,
+                )
+            )
+
+        bridge_examples = registry.retrieve_bridge_examples(
+            bridge_query or primary_query,
+            top_k=bridge_top_k,
+            event_type=normalized_event_type,
+        ) if (bridge_query or primary_query) and "bridge" in available_index_names else []
+
+        return {
+            "text_event_examples": [
+                _normalize_text_event_example(item)
+                for item in _rank_and_trim_examples(text_examples, text_top_k)
+            ],
+            "image_semantic_examples": [
+                _normalize_image_semantic_example(item)
+                for item in _rank_and_trim_examples(image_examples, image_top_k)
+            ],
+            "bridge_examples": [
+                _normalize_bridge_example(item)
+                for item in _rank_and_trim_examples(bridge_examples, bridge_top_k)
+            ],
+        }
+
+    def _get_persistent_registry(self) -> Any | None:
+        if self._persistent_registry is not None:
+            return self._persistent_registry
+        try:
+            if self._persistent_registry_factory is not None:
+                self._persistent_registry = self._persistent_registry_factory()
+            else:
+                from mm_event_agent.rag.store_registry import RagStoreRegistry
+
+                self._persistent_registry = RagStoreRegistry()
+        except Exception:
+            self._persistent_registry = None
+        return self._persistent_registry
 
 
 def _normalize_corpora(corpora: dict[str, Sequence[dict[str, Any]]] | None) -> LayeredSimilarEvents:
@@ -161,6 +301,29 @@ def _bridge_repr(doc: dict[str, Any]) -> str:
 
 
 _default_store = LayeredRagStore()
+
+
+def _extract_image_query_path(raw_image: Any | None) -> str:
+    if not isinstance(raw_image, str):
+        return ""
+    candidate = raw_image.strip()
+    if not candidate:
+        return ""
+    return candidate if Path(candidate).exists() else ""
+
+
+def _rank_and_trim_examples(items: Sequence[dict[str, Any]], top_k: int) -> list[dict[str, Any]]:
+    normalized = [dict(item) for item in items if isinstance(item, dict)]
+    normalized.sort(
+        key=lambda item: float(item.get("retrieval_metadata", {}).get("score", 0.0)),
+        reverse=True,
+    )
+    trimmed = normalized[: max(0, int(top_k))]
+    for rank, item in enumerate(trimmed, start=1):
+        retrieval_metadata = dict(item.get("retrieval_metadata") or {})
+        retrieval_metadata["rank"] = rank
+        item["retrieval_metadata"] = retrieval_metadata
+    return trimmed
 
 
 def _normalize_text_event_example(item: dict[str, Any]) -> dict[str, Any]:
@@ -252,5 +415,18 @@ def build_index(corpora: dict[str, Sequence[dict[str, Any]]] | None) -> None:
     _default_store.build_index(corpora)
 
 
-def retrieve(raw_text: str, image_desc: str = "", event_type: str = "", top_k: int = 3) -> LayeredSimilarEvents:
-    return _default_store.retrieve(raw_text=raw_text, image_desc=image_desc, event_type=event_type, top_k=top_k)
+def retrieve(
+    raw_text: str,
+    image_desc: str = "",
+    event_type: str = "",
+    top_k: int = 3,
+    *,
+    raw_image: Any | None = None,
+) -> LayeredSimilarEvents:
+    return _default_store.retrieve(
+        raw_text=raw_text,
+        image_desc=image_desc,
+        event_type=event_type,
+        top_k=top_k,
+        raw_image=raw_image,
+    )
