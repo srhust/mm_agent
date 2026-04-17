@@ -23,6 +23,7 @@ from mm_event_agent.evidence.debug import summarize_evidence_sources
 from mm_event_agent.grounding.debug import summarize_grounding_activity
 from mm_event_agent.schemas import (
     VerificationDiagnostic,
+    describe_text_argument_normalization,
     empty_event,
     empty_fusion_context,
     empty_layered_similar_events,
@@ -31,8 +32,20 @@ from mm_event_agent.schemas import (
     tokenize_text,
     validate_event,
 )
+from mm_event_agent.trace_utils import append_prompt_trace, merge_stage_outputs, safe_image_reference
 
 _llm: ChatOpenAI | None = None
+_GENERIC_WEAK_PLACE_LABELS = {
+    "street",
+    "road",
+    "outdoors",
+    "outdoor",
+    "outside",
+    "scene",
+    "background",
+    "area",
+    "crowd",
+}
 
 
 ROLE_CONFUSION_GUIDANCE = [
@@ -77,7 +90,9 @@ def _perception_image_signal(perception_summary: str) -> str:
 
 
 def _has_usable_image_evidence(raw_image: Any, raw_image_desc: str, perception_summary: str) -> bool:
-    if raw_image is not None:
+    if isinstance(raw_image, (bytes, bytearray)):
+        return True
+    if isinstance(raw_image, str) and raw_image.strip():
         return True
     if str(raw_image_desc or "").strip():
         return True
@@ -306,6 +321,35 @@ def _validate_text_argument_fields(
                         "suggested_action": "realign_or_drop",
                     }
                 )
+            else:
+                normalization = describe_text_argument_normalization(text, span, text_tokens)
+                if normalization["has_determiner"]:
+                    issues.append(f"text argument includes determiner at index {index}")
+                    diagnostics.append(
+                        {
+                            "field_path": f"text_arguments[{index}].text",
+                            "issue_type": "contains_determiner",
+                            "suggested_action": "shrink_to_head_word",
+                        }
+                    )
+                if normalization["has_quantity"]:
+                    issues.append(f"text argument includes quantity word at index {index}")
+                    diagnostics.append(
+                        {
+                            "field_path": f"text_arguments[{index}].text",
+                            "issue_type": "contains_quantity",
+                            "suggested_action": "shrink_to_head_word",
+                        }
+                    )
+                if normalization["is_broader_than_preferred"]:
+                    issues.append(f"text argument is not normalized to preferred head-word span at index {index}")
+                    diagnostics.append(
+                        {
+                            "field_path": f"text_arguments[{index}].span",
+                            "issue_type": "unnormalized_head_word",
+                            "suggested_action": "shrink_to_head_word",
+                        }
+                    )
     return issues, diagnostics
 
 
@@ -355,6 +399,17 @@ def _validate_image_argument_fields(event: Mapping[str, Any]) -> tuple[list[str]
                     "suggested_action": "fill_or_drop",
                 }
             )
+        normalized_role = str(role or "").strip()
+        normalized_label = str(label or "").strip().lower()
+        if normalized_role == "Place" and normalized_label in _GENERIC_WEAK_PLACE_LABELS:
+            issues.append(f"weak generic Place image argument at index {index}")
+            diagnostics.append(
+                {
+                    "field_path": f"image_arguments[{index}].label",
+                    "issue_type": "generic_weak_place",
+                    "suggested_action": "drop_or_replace_with_directly_visible_place",
+                }
+            )
         if bbox is None:
             if grounding_status != "unresolved":
                 issues.append(f"image argument unresolved grounding missing at index {index}")
@@ -366,6 +421,15 @@ def _validate_image_argument_fields(event: Mapping[str, Any]) -> tuple[list[str]
                     }
                 )
             continue
+        if grounding_status != "grounded":
+            issues.append(f"image argument grounded bbox missing grounded status at index {index}")
+            diagnostics.append(
+                {
+                    "field_path": f"image_arguments[{index}].grounding_status",
+                    "issue_type": "invalid_grounding_status",
+                    "suggested_action": "mark_grounded_or_drop_bbox",
+                }
+            )
         if not isinstance(bbox, list) or len(bbox) != 4:
             issues.append(f"invalid image argument bbox format at index {index}")
             diagnostics.append(
@@ -617,6 +681,7 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         grounding_results=grounding_results,
         evidence=evidence_items,
     )
+    audit_enabled = "prompt_trace" in state or "stage_outputs" in state
 
     ontology_block = format_full_ontology_for_prompt()
     if is_supported_event_type(raw_event_type):
@@ -642,6 +707,7 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         "Pay special attention to the listed closely related role confusions and flag them when the event uses the wrong role despite using an allowed role name.\n"
         "2) Text support: Are event.trigger.text and event.text_arguments supported by fusion_context.raw_text? "
         "Interpret spans as token spans [start, end), not character offsets.\n"
+        "Text arguments should be normalized to the preferred canonical head-word form: no determiners, no obvious quantity words, and no broad modifier-heavy spans when a shorter head-word span is available.\n"
         "3) Modality-specific support: Treat text_arguments and image_arguments as separate evidence views, not a one-to-one alignment requirement.\n"
         "A valid text-only run may have empty image_arguments.\n"
         "A valid multimodal run may have partial overlap across modalities.\n"
@@ -649,6 +715,7 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         "4) Image support: Are event.image_arguments supported by fusion_context.raw_image_desc and perception_summary, the derived image-side representations of the primary raw image input when available? "
         'Unresolved image arguments are allowed only when grounding_status is "unresolved".\n'
         "If an image argument is marked grounded and has a bbox, treat that as stronger image-side support.\n"
+        "Generic weak Place-like labels such as street, road, outdoors, outside, scene, background, area, or crowd should still be treated conservatively even when grounded, because they may only describe backdrop context rather than an event-relevant place role.\n"
         "If grounding_results contain a grounded match for a role/label pair, unresolved image arguments for that same pair may indicate an inconsistency.\n"
         "If grounding_results show failed grounding, do not over-penalize otherwise acceptable unresolved image arguments.\n"
         "5) Evidence support: Are event claims supported by fusion_context.evidence item snippets when evidence items are available? "
@@ -699,6 +766,42 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
             "verifier_confidence": confidence,
             "verifier_reason": reason,
         }
+        if audit_enabled:
+            result["prompt_trace"] = append_prompt_trace(
+                state,
+                {
+                    "sample_id": "",
+                    "stage": "verifier",
+                    "model_name": settings.openai_model,
+                    "prompt_text": prompt,
+                    "image_path": safe_image_reference(raw_image),
+                    "input_summary": {
+                        "fusion_context_summary": {
+                            "raw_text": raw_text,
+                            "raw_image_desc": raw_image_desc,
+                            "perception_summary": perception_summary,
+                            "evidence_count": len(evidence_items),
+                        },
+                        "event": event,
+                        "grounding_results": grounding_results if isinstance(grounding_results, list) else [],
+                        "depends_on": ["stage_c_output", "grounding_results"],
+                    },
+                    "response_text": raw,
+                    "parsed_output": parsed if parsed is not None else {},
+                },
+            )
+            result["stage_outputs"] = merge_stage_outputs(
+                state,
+                {
+                    "verifier_output": {
+                        "verified": verified,
+                        "issues": issues,
+                        "verifier_reason": reason,
+                        "verifier_confidence": confidence,
+                        "verifier_diagnostics": diagnostics,
+                    }
+                },
+            )
         log_node_event(
             "verifier",
             state,
@@ -730,6 +833,48 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
             "verifier_confidence": 0.0,
             "verifier_reason": "verifier failure",
         }
+        if audit_enabled:
+            result["prompt_trace"] = append_prompt_trace(
+                state,
+                {
+                    "sample_id": "",
+                    "stage": "verifier",
+                    "model_name": settings.openai_model,
+                    "prompt_text": prompt,
+                    "image_path": safe_image_reference(raw_image),
+                    "input_summary": {
+                        "fusion_context_summary": {
+                            "raw_text": raw_text,
+                            "raw_image_desc": raw_image_desc,
+                            "perception_summary": perception_summary,
+                            "evidence_count": len(evidence_items),
+                        },
+                        "event": event,
+                        "grounding_results": grounding_results if isinstance(grounding_results, list) else [],
+                        "depends_on": ["stage_c_output", "grounding_results"],
+                    },
+                    "response_text": str(exc),
+                    "parsed_output": {},
+                },
+            )
+            result["stage_outputs"] = merge_stage_outputs(
+                state,
+                {
+                    "verifier_output": {
+                        "verified": False,
+                        "issues": [str(exc)],
+                        "verifier_reason": "verifier failure",
+                        "verifier_confidence": 0.0,
+                        "verifier_diagnostics": [
+                            {
+                                "field_path": "event",
+                                "issue_type": "verifier_failure",
+                                "suggested_action": "retry_or_repair",
+                            }
+                        ],
+                    }
+                },
+            )
         log_node_event(
             "verifier",
             state,

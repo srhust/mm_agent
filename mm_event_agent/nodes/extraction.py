@@ -35,12 +35,24 @@ from mm_event_agent.schemas import (
     parse_event_json,
     resolve_text_token_sequence,
 )
+from mm_event_agent.trace_utils import append_prompt_trace, merge_stage_outputs, safe_image_reference
 from mm_event_agent.grounding.florence2_hf import (
     apply_grounding_results_to_event,
     execute_grounding_requests,
 )
 
 _llm: ChatOpenAI | None = None
+_GENERIC_WEAK_PLACE_LABELS = {
+    "street",
+    "road",
+    "outdoors",
+    "outdoor",
+    "outside",
+    "scene",
+    "background",
+    "area",
+    "crowd",
+}
 
 
 def _get_llm() -> ChatOpenAI:
@@ -139,6 +151,34 @@ def _extract_stage_json(prompt: str, *, raw_image: Any = None) -> dict[str, Any]
     return parsed
 
 
+def _invoke_traced_stage(
+    state: Mapping[str, Any],
+    *,
+    stage: str,
+    prompt: str,
+    input_summary: Mapping[str, Any],
+    raw_image: Any = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    out = _get_llm().invoke([_build_stage_message(prompt, raw_image=raw_image)])
+    raw = _msg_text(out.content)
+    from mm_event_agent.schemas import extract_json_object
+
+    parsed = extract_json_object(raw)
+    if parsed is None:
+        raise ValueError("stage output is not valid JSON")
+    trace_record = {
+        "sample_id": "",
+        "stage": stage,
+        "model_name": settings.extraction_model_name,
+        "prompt_text": prompt,
+        "image_path": safe_image_reference(raw_image),
+        "input_summary": dict(input_summary),
+        "response_text": raw,
+        "parsed_output": parsed,
+    }
+    return parsed, trace_record
+
+
 def _build_image_side_info(raw_image_desc: str, perception_summary: str) -> str:
     """Build compact auxiliary image-side context from intermediate signals."""
     summary = str(perception_summary or "").strip()
@@ -158,12 +198,34 @@ def _perception_image_signal(perception_summary: str) -> str:
     return summary
 
 
-def _has_usable_image_evidence(raw_image: Any, raw_image_desc: str, perception_summary: str) -> bool:
-    if _build_image_content_block(raw_image) is not None:
-        return True
+def _has_valid_image_side_context(raw_image_desc: str, perception_summary: str) -> bool:
     if str(raw_image_desc or "").strip():
         return True
     return bool(_perception_image_signal(perception_summary))
+
+
+def _has_usable_image_evidence(raw_image: Any, raw_image_desc: str, perception_summary: str) -> bool:
+    if _build_image_content_block(raw_image) is not None:
+        return True
+    return _has_valid_image_side_context(raw_image_desc, perception_summary)
+
+
+def _is_generic_weak_place_label(label: str) -> bool:
+    normalized = " ".join(str(label or "").strip().lower().split())
+    return normalized in _GENERIC_WEAK_PLACE_LABELS
+
+
+def _filter_weak_image_arguments(event_type: str, image_arguments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for item in image_arguments:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        label = str(item.get("label") or "").strip()
+        if event_type == "Justice:Arrest-Jail" and role == "Place" and _is_generic_weak_place_label(label):
+            continue
+        filtered.append(item)
+    return filtered
 
 
 def _get_text_token_sequence(state: Mapping[str, Any], fusion_context: Mapping[str, Any], raw_text: str) -> list[str]:
@@ -277,7 +339,10 @@ def _stage_a_select_event_type(
     patterns: Any,
     event_type_mode: str,
     raw_image: Any = None,
-) -> str:
+    *,
+    state: Mapping[str, Any] | None = None,
+    return_trace: bool = False,
+) -> Any:
     allowed_event_types = get_supported_event_types()
     ontology_block = format_full_ontology_for_prompt()
     formatted_text_event_examples_topk = _format_text_event_examples_topk(patterns)
@@ -321,16 +386,26 @@ def _stage_a_select_event_type(
         f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
         f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
     )
-    parsed = _extract_stage_json(
-        prompt,
+    parsed, trace_record = _invoke_traced_stage(
+        state or {},
+        stage="extraction_stage_a",
+        prompt=prompt,
+        input_summary={
+            "event_type_mode": normalized_mode,
+            "raw_text": raw_text,
+            "image_side_info": image_side_info,
+            "evidence_count": len(evidence_items),
+            "retrieved_text_event_examples": formatted_text_event_examples_topk,
+            "retrieved_bridge_examples": formatted_bridge_examples_topk,
+        },
         raw_image=raw_image if settings.extraction_stage_a_use_raw_image else None,
     )
     event_type = str(parsed.get("event_type") or "").strip()
     if normalized_mode == "transfer" and event_type == "Unsupported":
-        return event_type
+        return (event_type, trace_record) if return_trace else event_type
     if event_type not in allowed_event_types:
         raise ValueError("unsupported event_type")
-    return event_type
+    return (event_type, trace_record) if return_trace else event_type
 
 
 def _stage_b_extract_text_fields(
@@ -339,7 +414,10 @@ def _stage_b_extract_text_fields(
     image_side_info: str,
     patterns: Any,
     evidence_items: list[Any],
-) -> dict[str, Any]:
+    *,
+    state: Mapping[str, Any] | None = None,
+    return_trace: bool = False,
+) -> Any:
     allowed_roles = get_allowed_text_roles(event_type)
     schema_block = format_event_schema_for_prompt(event_type)
     formatted_text_event_examples_topk = _format_text_event_examples_topk(patterns)
@@ -362,6 +440,7 @@ def _stage_b_extract_text_fields(
         "- Use the trigger_hint only as semantic guidance; trigger.text must still be copied from raw_text exactly.\n"
         "- trigger.text must be copied directly from raw_text or trigger must be null.\n"
         "- each text argument text must be copied directly from raw_text.\n"
+        "- Prefer the canonical head-word mention for text arguments: no determiners, no obvious quantity words, and avoid broad modifier-heavy spans when a shorter head preserves the role meaning.\n"
         "- do not paraphrase trigger or text arguments.\n"
         "- if evidence is insufficient, prefer omission over hallucination.\n"
         "- span must be null in the model output; post-processing will align token spans.\n"
@@ -371,13 +450,27 @@ def _stage_b_extract_text_fields(
         f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
         f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
     )
-    parsed = _extract_stage_json(prompt)
+    parsed, trace_record = _invoke_traced_stage(
+        state or {},
+        stage="extraction_stage_b",
+        prompt=prompt,
+        input_summary={
+            "depends_on": ["stage_a_output"],
+            "stage_a_output": {"event_type": event_type},
+            "raw_text": raw_text,
+            "image_side_info": image_side_info,
+            "evidence_count": len(evidence_items),
+            "retrieved_text_event_examples": formatted_text_event_examples_topk,
+            "retrieved_bridge_examples": formatted_bridge_examples_topk,
+        },
+    )
     trigger = parsed.get("trigger")
     text_arguments = parsed.get("text_arguments")
-    return {
+    result = {
         "trigger": trigger if isinstance(trigger, dict) or trigger is None else None,
         "text_arguments": text_arguments if isinstance(text_arguments, list) else [],
     }
+    return (result, trace_record) if return_trace else result
 
 
 def _stage_c_extract_image_arguments(
@@ -388,7 +481,10 @@ def _stage_c_extract_image_arguments(
     evidence_items: list[Any],
     raw_image: Any = None,
     raw_text: str = "",
-) -> list[dict[str, Any]]:
+    *,
+    state: Mapping[str, Any] | None = None,
+    return_trace: bool = False,
+) -> Any:
     allowed_roles = get_allowed_image_roles(event_type)
     schema_block = format_event_schema_for_prompt(event_type)
     visibility_block = format_image_role_visibility_guidance_for_prompt(event_type)
@@ -419,6 +515,8 @@ def _stage_c_extract_image_arguments(
         "- Be conservative: prefer omission over unsupported image-role prediction.\n"
         "- For visually weaker roles, require direct visual evidence rather than generic scene context.\n"
         "- Do not output a weakly visible role just because it is semantically allowed by the ontology.\n"
+        "- For weak Place-like roles, do not use generic background-only labels such as street, road, outdoors, outside, scene, background, area, or crowd unless the place itself is a clearly depicted event-relevant target.\n"
+        "- In Justice:Arrest-Jail scenes, Agent and Person are usually visually stronger than Place; prefer omitting Place unless the location is directly and specifically depicted.\n"
         '- bbox must be null and grounding_status must be "unresolved".\n'
         "- do not pretend to know a precise bbox.\n"
         "- use role + label only when supported by image-side information.\n"
@@ -428,12 +526,30 @@ def _stage_c_extract_image_arguments(
         f'"text_arguments": {json.dumps(text_arguments, ensure_ascii=False)}, '
         f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
     )
-    parsed = _extract_stage_json(prompt, raw_image=raw_image)
+    parsed, trace_record = _invoke_traced_stage(
+        state or {},
+        stage="extraction_stage_c",
+        prompt=prompt,
+        input_summary={
+            "depends_on": ["stage_a_output", "stage_b_output"],
+            "stage_a_output": {"event_type": event_type},
+            "stage_b_output": {"text_arguments": text_arguments},
+            "raw_text": raw_text,
+            "image_side_info": image_side_info,
+            "evidence_count": len(evidence_items),
+            "retrieved_image_semantic_examples": formatted_image_semantic_examples_topk,
+            "retrieved_bridge_examples": formatted_bridge_examples_topk,
+        },
+        raw_image=raw_image,
+    )
     image_arguments = parsed.get("image_arguments")
-    return image_arguments if isinstance(image_arguments, list) else []
+    result = image_arguments if isinstance(image_arguments, list) else []
+    result = _filter_weak_image_arguments(event_type, result)
+    return (result, trace_record) if return_trace else result
 
 
 def _run_staged_extraction(
+    state: Mapping[str, Any],
     raw_text: str,
     raw_image: Any,
     raw_image_desc: str,
@@ -441,27 +557,50 @@ def _run_staged_extraction(
     patterns: Any,
     evidence_items: list[Any],
     event_type_mode: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     image_side_info = _build_image_side_info(raw_image_desc, perception_summary)
     has_usable_image_evidence = _has_usable_image_evidence(raw_image, raw_image_desc, perception_summary)
-    event_type = _stage_a_select_event_type(
+    has_valid_image_side_context = _has_valid_image_side_context(raw_image_desc, perception_summary)
+    trace_records: list[dict[str, Any]] = []
+    event_type, stage_a_trace = _stage_a_select_event_type(
         raw_text,
         image_side_info,
         evidence_items,
         patterns,
         event_type_mode,
         raw_image,
+        state=state,
+        return_trace=True,
     )
+    trace_records.append(stage_a_trace)
+    stage_a_output = {"event_type": event_type}
     stage_a_info = {
         "stage_a_event_type_mode": str(event_type_mode or "closed_set"),
         "stage_a_selected_event_type": event_type,
         "stage_a_selected_unsupported": event_type == "Unsupported",
     }
     if event_type == "Unsupported":
-        return empty_event(), stage_a_info
-    text_fields = _stage_b_extract_text_fields(event_type, raw_text, image_side_info, patterns, evidence_items)
-    if has_usable_image_evidence:
-        image_arguments = _stage_c_extract_image_arguments(
+        return empty_event(), stage_a_info, trace_records, {
+            "stage_a_output": stage_a_output,
+            "stage_b_output": {"trigger": None, "text_arguments": []},
+            "stage_c_output": {"image_arguments": []},
+        }
+    text_fields, stage_b_trace = _stage_b_extract_text_fields(
+        event_type,
+        raw_text,
+        image_side_info,
+        patterns,
+        evidence_items,
+        state=state,
+        return_trace=True,
+    )
+    trace_records.append(stage_b_trace)
+    stage_b_output = {
+        "trigger": text_fields["trigger"],
+        "text_arguments": text_fields["text_arguments"],
+    }
+    if has_usable_image_evidence and (raw_image is not None or has_valid_image_side_context):
+        image_arguments, stage_c_trace = _stage_c_extract_image_arguments(
             event_type,
             image_side_info,
             text_fields["text_arguments"],
@@ -469,9 +608,31 @@ def _run_staged_extraction(
             evidence_items,
             raw_image,
             raw_text,
+            state=state,
+            return_trace=True,
         )
+        trace_records.append(stage_c_trace)
     else:
         image_arguments = []
+        trace_records.append(
+            {
+                "sample_id": "",
+                "stage": "extraction_stage_c",
+                "model_name": settings.extraction_model_name,
+                "prompt_text": "",
+                "image_path": safe_image_reference(raw_image),
+                "input_summary": {
+                    "depends_on": ["stage_a_output", "stage_b_output"],
+                    "stage_a_output": stage_a_output,
+                    "stage_b_output": stage_b_output,
+                    "usable_image_evidence": False,
+                    "valid_image_side_context": has_valid_image_side_context,
+                },
+                "response_text": "skipped: no usable image evidence",
+                "parsed_output": {"image_arguments": []},
+            }
+        )
+    stage_c_output = {"image_arguments": image_arguments}
     return (
         {
             "event_type": event_type,
@@ -480,6 +641,12 @@ def _run_staged_extraction(
             "image_arguments": image_arguments,
         },
         stage_a_info,
+        trace_records,
+        {
+            "stage_a_output": stage_a_output,
+            "stage_b_output": stage_b_output,
+            "stage_c_output": stage_c_output,
+        },
     )
 
 
@@ -494,7 +661,7 @@ def _maybe_run_grounding(
     extraction; grounding here is an optional next-stage spatial layer.
     """
     grounding_requests = build_grounding_requests(event)
-    if not grounding_requests or raw_image is None:
+    if not grounding_requests or _build_image_content_block(raw_image) is None:
         return event, [], False, grounding_requests
 
     try:
@@ -544,8 +711,14 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
     grounding_results: list[dict[str, Any]] = []
     grounding_requests: list[dict[str, Any]] = []
     grounding_summary = summarize_grounding_activity([], [], [], [])
+    alignment_issues: list[str] = []
+    alignment_diagnostics: list[dict[str, Any]] = []
+    stage_trace_records: list[dict[str, Any]] = []
+    stage_outputs_update: dict[str, Any] = {}
+    audit_enabled = "prompt_trace" in state or "stage_outputs" in state
     try:
-        assembled_event, stage_a_info = _run_staged_extraction(
+        assembled_event, stage_a_info, stage_trace_records, stage_outputs_update = _run_staged_extraction(
+            state,
             raw_text,
             raw_image,
             raw_image_desc,
@@ -558,7 +731,11 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             event = empty_event()
         else:
             parsed_event = parse_event_json(json.dumps(assembled_event, ensure_ascii=False))
-            event, _, _ = align_text_grounded_event(parsed_event, raw_text, token_sequence=text_tokens)
+            event, alignment_issues, alignment_diagnostics = align_text_grounded_event(
+                parsed_event,
+                raw_text,
+                token_sequence=text_tokens,
+            )
         image_arguments_before = list(event.get("image_arguments")) if isinstance(event.get("image_arguments"), list) else []
         event, grounding_results, grounding_attempted, grounding_requests = _maybe_run_grounding(raw_image, event)
         grounding_summary = summarize_grounding_activity(
@@ -576,6 +753,22 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             evidence=evidence_items,
         )
         result = {"event": event, "grounding_results": grounding_results}
+        if audit_enabled:
+            prompt_trace = state.get("prompt_trace")
+            if not isinstance(prompt_trace, list):
+                prompt_trace = []
+            for record in stage_trace_records:
+                prompt_trace = append_prompt_trace({"prompt_trace": prompt_trace}, record)
+            stage_outputs = merge_stage_outputs(
+                state,
+                {
+                    **stage_outputs_update,
+                    "grounding_requests": grounding_requests,
+                    "grounding_results": grounding_results,
+                },
+            )
+            result["prompt_trace"] = prompt_trace
+            result["stage_outputs"] = stage_outputs
         log_node_event(
             "extraction",
             state,
@@ -593,6 +786,8 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_applied_bboxes=grounding_summary["applied_grounded_bboxes"],
             staged=True,
             evidence_used=len(evidence_items),
+            text_alignment_issues=alignment_issues,
+            text_alignment_diagnostics=alignment_diagnostics,
             text_support=support_summary["text_support"],
             image_support=support_summary["image_support"],
             grounding_support=support_summary["grounding_support"],
@@ -610,6 +805,22 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             evidence=evidence_items,
         )
         result = {"event": fallback, "grounding_results": grounding_results}
+        if audit_enabled:
+            prompt_trace = state.get("prompt_trace")
+            if not isinstance(prompt_trace, list):
+                prompt_trace = []
+            for record in stage_trace_records:
+                prompt_trace = append_prompt_trace({"prompt_trace": prompt_trace}, record)
+            stage_outputs = merge_stage_outputs(
+                state,
+                {
+                    **stage_outputs_update,
+                    "grounding_requests": grounding_requests,
+                    "grounding_results": grounding_results,
+                },
+            )
+            result["prompt_trace"] = prompt_trace
+            result["stage_outputs"] = stage_outputs
         log_node_event(
             "extraction",
             state,
@@ -627,6 +838,8 @@ def extraction(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_applied_bboxes=grounding_summary["applied_grounded_bboxes"],
             staged=True,
             evidence_used=len(evidence_items),
+            text_alignment_issues=alignment_issues,
+            text_alignment_diagnostics=alignment_diagnostics,
             text_support=support_summary["text_support"],
             image_support=support_summary["image_support"],
             grounding_support=support_summary["grounding_support"],

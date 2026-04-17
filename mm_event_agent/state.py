@@ -45,6 +45,9 @@ class AgentState(TypedDict):
     event: Event
     grounding_results: list[GroundingResult]
     memory: list[Any]
+    prompt_trace: list[dict[str, Any]]
+    stage_outputs: dict[str, Any]
+    repair_history: list[dict[str, Any]]
 
     # Control fields: verifier/repair loop only.
     verified: bool

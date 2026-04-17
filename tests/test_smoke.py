@@ -1,16 +1,32 @@
 from __future__ import annotations
 
+import argparse
+from contextlib import redirect_stdout
 from dataclasses import replace
+import io
 import os
+from pathlib import Path
+import tempfile
+import shutil
 import unittest
 import mm_event_agent.nodes.extraction as extraction_module
+import mm_event_agent.main as main_module
 import mm_event_agent.nodes.perception as perception_module
 import mm_event_agent.runtime_config as runtime_config
 import mm_event_agent.grounding.florence2_hf as grounding_module
+import scripts.eval_m2e2_agent as eval_m2e2_agent_module
+import scripts.run_m2e2_smoke as run_m2e2_smoke_module
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from mm_event_agent.graph import build_graph
+from mm_event_agent.m2e2_adapter import (
+    agent_output_to_m2e2_prediction,
+    extract_m2e2_gold_annotations,
+    extract_m2e2_gold_record,
+    get_m2e2_sample_id,
+    m2e2_sample_to_agent_state,
+)
 from mm_event_agent.evidence.debug import build_evidence_source_snapshot, summarize_evidence_sources
 from mm_event_agent.grounding.florence2_hf import (
     Florence2HFGrounder,
@@ -181,6 +197,81 @@ class SmokeTests(unittest.TestCase):
                 "index_name": "text_event_examples",
             },
         )
+
+    def test_initialize_rag_runtime_uses_persistent_mode_without_demo_corpus(self) -> None:
+        with patch.object(
+            main_module,
+            "settings",
+            replace(main_module.settings, rag_use_persistent_index=True, rag_use_demo_corpus=False),
+        ), patch.object(main_module, "build_index") as mock_build_index:
+            mode = main_module._initialize_rag_runtime()
+
+        self.assertEqual(mode, "persistent")
+        mock_build_index.assert_called_once_with(None)
+
+    def test_initialize_rag_runtime_keeps_demo_init_when_enabled(self) -> None:
+        with patch.object(
+            main_module,
+            "settings",
+            replace(main_module.settings, rag_use_persistent_index=False, rag_use_demo_corpus=True),
+        ), patch.object(main_module, "build_index") as mock_build_index:
+            mode = main_module._initialize_rag_runtime()
+
+        self.assertEqual(mode, "demo")
+        mock_build_index.assert_called_once_with(main_module.RAG_EVENT_CORPUS)
+
+    def test_m2e2_smoke_main_starts_in_no_rag_mode_without_demo_init(self) -> None:
+        sample = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "sample.jpg",
+        }
+
+        class FakeGraph:
+            def invoke(self, state):
+                return {
+                    **state,
+                    "event": empty_event(),
+                    "grounding_results": [],
+                    "similar_events": empty_layered_similar_events(),
+                    "verified": False,
+                    "issues": [],
+                    "verifier_reason": "",
+                    "verifier_confidence": 0.0,
+                }
+
+        stdout = io.StringIO()
+        with patch.object(
+            run_m2e2_smoke_module,
+            "parse_args",
+            return_value=argparse.Namespace(
+                input="dummy.jsonl",
+                image_root="dummy_images",
+                sample_id=None,
+                output_dir=None,
+            ),
+        ), patch.object(
+            run_m2e2_smoke_module,
+            "load_m2e2_samples",
+            return_value=[sample],
+        ), patch(
+            "pathlib.Path.exists",
+            return_value=True,
+        ), patch.object(
+            main_module,
+            "settings",
+            replace(main_module.settings, rag_use_persistent_index=False, rag_use_demo_corpus=False),
+        ), patch.object(main_module, "build_index") as mock_build_index, patch.object(
+            run_m2e2_smoke_module,
+            "build_graph",
+            return_value=FakeGraph(),
+        ), redirect_stdout(stdout):
+            run_m2e2_smoke_module.main()
+
+        mock_build_index.assert_called_once_with(None)
+        self.assertIn("sample_id: m2e2_001", stdout.getvalue())
+        self.assertIn("similar_events_summary:", stdout.getvalue())
 
     def test_graph_execution_smoke(self) -> None:
         state = make_state()
@@ -1215,6 +1306,39 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("trigger text/span mismatch", result["issues"])
         self.assertTrue(any(x["field_path"] == "trigger.span" for x in result["verifier_diagnostics"]))
 
+    def test_verifier_flags_unnormalized_broad_text_arguments(self) -> None:
+        state = make_state()
+        state["text"] = "Two Chicago police officers arrested the suspect"
+        state["tokens"] = ["Two", "Chicago", "police", "officers", "arrested", "the", "suspect"]
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": "",
+            "perception_summary": "",
+            "patterns": [],
+            "evidence": [],
+            "text_tokens": state["tokens"],
+        }
+        state["event"] = {
+            "event_type": "Justice:Arrest-Jail",
+            "trigger": {"text": "arrested", "modality": "text", "span": {"start": 4, "end": 5}},
+            "text_arguments": [
+                {"role": "Agent", "text": "Two Chicago police officers", "span": {"start": 0, "end": 4}}
+            ],
+            "image_arguments": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(
+                ['{"verdict":"NO","issues":["unnormalized mention"],"confidence":0.7,"reason":"broad argument span"}']
+            ),
+        ):
+            result = verifier(state)
+
+        issue_types = {item["issue_type"] for item in result["verifier_diagnostics"]}
+        self.assertIn("contains_quantity", issue_types)
+        self.assertIn("unnormalized_head_word", issue_types)
+
     def test_verifier_keeps_structured_diagnostics(self) -> None:
         state = make_state()
         state["event"] = empty_event()
@@ -1491,6 +1615,30 @@ class SmokeTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertEqual(result["issues"], [])
 
+    def test_verifier_flags_generic_weak_place_image_argument(self) -> None:
+        state = make_state()
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+        state["event"] = {
+            "event_type": "Justice:Arrest-Jail",
+            "trigger": {"text": "arrested", "modality": "text", "span": {"start": 1, "end": 2}},
+            "text_arguments": [{"role": "Person", "text": "suspect", "span": {"start": 3, "end": 4}}],
+            "image_arguments": [{"role": "Place", "label": "street", "bbox": [1, 2, 3, 4], "grounding_status": "grounded"}],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(['{"verdict":"NO","issues":["weak place"],"confidence":0.6,"reason":"generic backdrop place"}']),
+        ):
+            result = verifier(state)
+
+        self.assertTrue(any(item["issue_type"] == "generic_weak_place" for item in result["verifier_diagnostics"]))
+
     def test_verifier_flags_image_arguments_in_text_only_run(self) -> None:
         state = make_state()
         state["raw_image"] = None
@@ -1614,6 +1762,56 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(aligned["text_arguments"][0]["span"], {"start": 5, "end": 6})
         self.assertEqual(issues, [])
         self.assertEqual(diagnostics, [])
+
+    def test_align_text_grounded_event_shrinks_a_man_to_head_word(self) -> None:
+        aligned, issues, diagnostics = align_text_grounded_event(
+            {
+                "event_type": "Justice:Arrest-Jail",
+                "trigger": None,
+                "text_arguments": [{"role": "Person", "text": "a man", "span": {"start": 0, "end": 2}}],
+                "image_arguments": [],
+            },
+            "a man was arrested",
+            token_sequence=["a", "man", "was", "arrested"],
+        )
+
+        self.assertEqual(aligned["text_arguments"][0]["text"], "man")
+        self.assertEqual(aligned["text_arguments"][0]["span"], {"start": 1, "end": 2})
+        self.assertEqual(issues, [])
+        self.assertEqual(diagnostics, [])
+
+    def test_align_text_grounded_event_shrinks_two_chicago_police_officers_to_head_word(self) -> None:
+        aligned, _, _ = align_text_grounded_event(
+            {
+                "event_type": "Justice:Arrest-Jail",
+                "trigger": None,
+                "text_arguments": [
+                    {"role": "Agent", "text": "Two Chicago police officers", "span": {"start": 0, "end": 4}}
+                ],
+                "image_arguments": [],
+            },
+            "Two Chicago police officers arrested him",
+            token_sequence=["Two", "Chicago", "police", "officers", "arrested", "him"],
+        )
+
+        self.assertEqual(aligned["text_arguments"][0]["text"], "officers")
+        self.assertEqual(aligned["text_arguments"][0]["span"], {"start": 3, "end": 4})
+
+    def test_align_text_grounded_event_normalizes_span_field_order(self) -> None:
+        aligned, _, _ = align_text_grounded_event(
+            {
+                "event_type": "Conflict:Attack",
+                "trigger": {"text": "exploded", "modality": "text", "span": {"end": 3, "start": 2}},
+                "text_arguments": [{"role": "Place", "text": "market", "span": {"end": 6, "start": 5}}],
+                "image_arguments": [],
+            },
+            "A bomb exploded in a market",
+        )
+
+        self.assertEqual(aligned["trigger"]["span"], {"start": 2, "end": 3})
+        self.assertEqual(list(aligned["trigger"]["span"].keys()), ["start", "end"])
+        self.assertEqual(aligned["text_arguments"][0]["span"], {"start": 5, "end": 6})
+        self.assertEqual(list(aligned["text_arguments"][0]["span"].keys()), ["start", "end"])
 
     def test_align_text_grounded_event_drops_ambiguous_or_missing_text_fields(self) -> None:
         aligned, issues, diagnostics = align_text_grounded_event(
@@ -1993,6 +2191,67 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(result["event"]["trigger"]["span"], {"start": 2, "end": 3})
         self.assertEqual(result["event"]["image_arguments"], [])
 
+    def test_repair_fixes_broad_text_argument_to_head_word_with_token_span(self) -> None:
+        state = make_state()
+        state["text"] = "Two Chicago police officers arrested the suspect"
+        state["tokens"] = ["Two", "Chicago", "police", "officers", "arrested", "the", "suspect"]
+        state["event"] = {
+            "event_type": "Justice:Arrest-Jail",
+            "trigger": {"text": "arrested", "modality": "text", "span": {"start": 4, "end": 5}},
+            "text_arguments": [
+                {"role": "Agent", "text": "Two Chicago police officers", "span": {"start": 0, "end": 4}}
+            ],
+            "image_arguments": [],
+        }
+        state["verifier_diagnostics"] = [
+            {
+                "field_path": "text_arguments[0].span",
+                "issue_type": "unnormalized_head_word",
+                "suggested_action": "shrink_to_head_word",
+            }
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.repair._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Justice:Arrest-Jail","trigger":{"text":"arrested","modality":"text","span":null},"text_arguments":[{"role":"Agent","text":"Two Chicago police officers","span":null}],"image_arguments":[]}'
+                ]
+            ),
+        ):
+            result = repair(state)
+
+        self.assertEqual(result["event"]["text_arguments"][0]["text"], "officers")
+        self.assertEqual(result["event"]["text_arguments"][0]["span"], {"start": 3, "end": 4})
+
+    def test_repair_removes_generic_weak_place_image_argument(self) -> None:
+        state = make_state()
+        state["event"] = {
+            "event_type": "Justice:Arrest-Jail",
+            "trigger": {"text": "arrested", "modality": "text", "span": {"start": 1, "end": 2}},
+            "text_arguments": [{"role": "Person", "text": "suspect", "span": {"start": 3, "end": 4}}],
+            "image_arguments": [{"role": "Place", "label": "street", "bbox": None, "grounding_status": "unresolved"}],
+        }
+        state["verifier_diagnostics"] = [
+            {
+                "field_path": "image_arguments[0].label",
+                "issue_type": "generic_weak_place",
+                "suggested_action": "drop_or_replace_with_directly_visible_place",
+            }
+        ]
+
+        with patch(
+            "mm_event_agent.nodes.repair._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Justice:Arrest-Jail","trigger":{"text":"arrested","modality":"text","span":null},"text_arguments":[{"role":"Person","text":"suspect","span":null}],"image_arguments":[{"role":"Place","label":"street","bbox":null,"grounding_status":"unresolved"}]}'
+                ]
+            ),
+        ):
+            result = repair(state)
+
+        self.assertEqual(result["event"]["image_arguments"], [])
+
     def test_extraction_rejects_unsupported_closed_set_event_type(self) -> None:
         state = make_state()
         state["fusion_context"] = {
@@ -2185,6 +2444,53 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("visually stronger roles: [Target, Instrument, Place]", prompt)
         self.assertIn("For visually stronger roles, prediction is still optional", prompt)
 
+    def test_stage_c_filters_generic_weak_place_labels_for_arrest(self) -> None:
+        stage_c_llm = RecordingLLM(
+            '{"image_arguments":[{"role":"Place","label":"street","bbox":null,"grounding_status":"unresolved"},{"role":"Person","label":"suspect","bbox":null,"grounding_status":"unresolved"}]}'
+        )
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=stage_c_llm,
+        ):
+            from mm_event_agent.nodes.extraction import _stage_c_extract_image_arguments
+
+            result = _stage_c_extract_image_arguments(
+                "Justice:Arrest-Jail",
+                "police arresting a person outdoors",
+                [],
+                empty_layered_similar_events(),
+                [],
+            )
+
+        self.assertEqual(
+            result,
+            [{"role": "Person", "label": "suspect", "bbox": None, "grounding_status": "unresolved"}],
+        )
+
+    def test_stage_c_preserves_multiple_same_role_image_arguments(self) -> None:
+        stage_c_llm = RecordingLLM(
+            '{"image_arguments":[{"role":"Person","label":"man","bbox":null,"grounding_status":"unresolved"},{"role":"Person","label":"woman","bbox":null,"grounding_status":"unresolved"}]}'
+        )
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=stage_c_llm,
+        ):
+            from mm_event_agent.nodes.extraction import _stage_c_extract_image_arguments
+
+            result = _stage_c_extract_image_arguments(
+                "Justice:Arrest-Jail",
+                "officers detaining two people",
+                [],
+                empty_layered_similar_events(),
+                [],
+            )
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["role"], "Person")
+        self.assertEqual(result[1]["role"], "Person")
+
     def test_stage_c_injects_image_examples_and_bridge_hints(self) -> None:
         stage_c_llm = RecordingLLM('{"image_arguments":[]}')
         patterns = {
@@ -2305,6 +2611,37 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(result["event"]["image_arguments"], [])
         self.assertEqual(result["grounding_results"], [])
 
+    def test_extraction_uses_provided_text_tokens_for_token_span_alignment(self) -> None:
+        state = make_state()
+        state["text"] = "New York exploded near downtown"
+        state["raw_image"] = None
+        state["image_desc"] = ""
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": "",
+            "perception_summary": "Text: New York exploded near downtown\nImage: ",
+            "text_tokens": ["New York", "exploded", "near", "downtown"],
+            "patterns": empty_layered_similar_events(),
+            "evidence": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack"}',
+                    '{"trigger":{"text":"exploded","modality":"text","span":{"end":99,"start":98}},"text_arguments":[{"role":"Place","text":"downtown","span":{"end":99,"start":98}}]}',
+                ]
+            ),
+        ), patch("mm_event_agent.nodes.extraction._stage_c_extract_image_arguments") as mock_stage_c:
+            result = extraction(state)
+
+        self.assertFalse(mock_stage_c.called)
+        self.assertEqual(result["event"]["trigger"]["span"], {"start": 1, "end": 2})
+        self.assertEqual(list(result["event"]["trigger"]["span"].keys()), ["start", "end"])
+        self.assertEqual(result["event"]["text_arguments"][0]["span"], {"start": 3, "end": 4})
+        self.assertEqual(list(result["event"]["text_arguments"][0]["span"].keys()), ["start", "end"])
+
     def test_transfer_mode_allows_unsupported(self) -> None:
         state = make_state()
         state["event_type_mode"] = "transfer"
@@ -2413,6 +2750,490 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(valid["text_arguments"][0]["role"], "Place")
         self.assertEqual(valid["image_arguments"][0]["grounding_status"], "unresolved")
 
+    def test_m2e2_sample_to_agent_state_maps_text_tokens_and_image_path(self) -> None:
+        sample = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "images/sample.jpg",
+        }
+
+        state = m2e2_sample_to_agent_state(sample, "E:/dataset")
+
+        self.assertEqual(state["text"], sample["text"])
+        self.assertEqual(state["tokens"], sample["words"])
+        self.assertEqual(state["fusion_context"]["text_tokens"], sample["words"])
+        self.assertEqual(state["raw_image"], str(Path("E:/dataset") / "images/sample.jpg"))
+        self.assertEqual(state["image_desc"], "")
+        self.assertEqual(state["memory"], [])
+        self.assertEqual(state["prompt_trace"], [])
+        self.assertEqual(state["stage_outputs"], {})
+        self.assertEqual(state["repair_history"], [])
+        self.assertEqual(state["repair_attempts"], 0)
+
+    def test_m2e2_sample_to_agent_state_excludes_gold_annotation_fields(self) -> None:
+        sample = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "images/sample.jpg",
+            "event_type": "Conflict:Attack",
+            "text_event_mentions": [{"event_type": "Conflict:Attack"}],
+            "text_arguments_flat": [{"role": "Place", "text": "market"}],
+            "image_event": {"event_type": "Conflict:Attack"},
+            "image_arguments_flat": [{"role": "Place", "label": "market"}],
+            "ground_truth": {"event_type": "Conflict:Attack"},
+        }
+
+        state = m2e2_sample_to_agent_state(sample, "E:/dataset")
+
+        for forbidden_key in (
+            "event_type",
+            "text_event_mentions",
+            "text_arguments_flat",
+            "image_event",
+            "image_arguments_flat",
+            "ground_truth",
+        ):
+            self.assertNotIn(forbidden_key, state)
+            self.assertNotIn(forbidden_key, state["fusion_context"])
+
+    def test_agent_output_to_m2e2_prediction_normalizes_spans_and_bboxes(self) -> None:
+        sample = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "images/sample.jpg",
+        }
+        agent_output = {
+            "event": {
+                "event_type": "Conflict:Attack",
+                "trigger": {"text": "exploded", "modality": "text", "span": None},
+                "text_arguments": [{"role": "Place", "text": "market", "span": None}],
+                "image_arguments": [{"role": "Place", "label": "market area", "bbox": [1, 2, 3, 4], "grounding_status": "grounded"}],
+            },
+            "grounding_results": [
+                {
+                    "role": "Place",
+                    "label": "market area",
+                    "grounding_query": "Place: market area",
+                    "bbox": [1, 2, 3, 4],
+                    "score": 0.9,
+                    "grounding_status": "grounded",
+                }
+            ],
+        }
+
+        prediction = agent_output_to_m2e2_prediction(sample, agent_output)
+
+        self.assertEqual(get_m2e2_sample_id(sample), "m2e2_001")
+        self.assertEqual(prediction["prediction"]["trigger"], {"text": "exploded", "start": 2, "end": 3})
+        self.assertEqual(
+            prediction["prediction"]["text_arguments"][0],
+            {"role": "Place", "text": "market", "start": 5, "end": 6},
+        )
+        self.assertEqual(
+            prediction["prediction"]["image_arguments"][0]["bbox"],
+            [1.0, 2.0, 3.0, 4.0],
+        )
+        self.assertEqual(prediction["prediction"]["image_arguments"][0]["role"], "Place")
+
+    def test_agent_output_to_m2e2_prediction_excludes_unresolved_image_arguments(self) -> None:
+        sample = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "images/sample.jpg",
+        }
+        agent_output = {
+            "event": {
+                "event_type": "Conflict:Attack",
+                "trigger": {"text": "exploded", "modality": "text", "span": None},
+                "text_arguments": [{"role": "Place", "text": "market", "span": None}],
+                "image_arguments": [{"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}],
+            },
+            "grounding_results": [],
+        }
+
+        prediction = agent_output_to_m2e2_prediction(sample, agent_output)
+
+        self.assertEqual(prediction["prediction"]["image_arguments"], [])
+
+    def test_extract_m2e2_gold_annotations_keeps_gold_for_offline_comparison(self) -> None:
+        sample = {
+            "id": "m2e2_001",
+            "event_type": "Conflict:Attack",
+            "event_mentions": [
+                {
+                    "event_type": "Conflict:Attack",
+                    "trigger": {"text": "exploded", "start": 2, "end": 3},
+                    "arguments": [{"role": "Place", "text": "market", "start": 5, "end": 6}],
+                }
+            ],
+            "text_event_mentions": [{"event_type": "Conflict:Attack"}],
+            "text_arguments_flat": [{"role": "Place", "text": "market"}],
+            "image_event": {"event_type": "Conflict:Attack"},
+            "image_arguments_flat": [{"role": "Place", "label": "market area"}],
+            "ground_truth": {"event_type": "Conflict:Attack"},
+        }
+
+        gold = extract_m2e2_gold_annotations(sample)
+
+        self.assertEqual(gold["sample_id"], "m2e2_001")
+        self.assertEqual(gold["event_type"], "Conflict:Attack")
+        self.assertEqual(gold["trigger"], {"text": "exploded", "start": 2, "end": 3})
+        self.assertEqual(gold["arguments"], [{"role": "Place", "text": "market", "start": 5, "end": 6}])
+        self.assertEqual(gold["text_arguments_flat"], [{"role": "Place", "text": "market"}])
+        self.assertEqual(gold["image_arguments_flat"], [{"role": "Place", "label": "market area"}])
+
+    def test_m2e2_smoke_main_does_not_leak_gold_fields_into_graph_input(self) -> None:
+        sample = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "sample.jpg",
+            "event_type": "Conflict:Attack",
+            "text_event_mentions": [{"event_type": "Conflict:Attack"}],
+            "text_arguments_flat": [{"role": "Place", "text": "market"}],
+            "image_event": {"event_type": "Conflict:Attack"},
+            "image_arguments_flat": [{"role": "Place", "label": "market area"}],
+            "ground_truth": {"event_type": "Conflict:Attack"},
+        }
+
+        class FakeGraph:
+            def invoke(self, state):
+                for forbidden_key in (
+                    "event_type",
+                    "text_event_mentions",
+                    "text_arguments_flat",
+                    "image_event",
+                    "image_arguments_flat",
+                    "ground_truth",
+                ):
+                    if forbidden_key in state or forbidden_key in state.get("fusion_context", {}):
+                        raise AssertionError(f"leaked gold field: {forbidden_key}")
+                return {
+                    **state,
+                    "event": empty_event(),
+                    "grounding_results": [],
+                    "similar_events": empty_layered_similar_events(),
+                    "verified": False,
+                    "issues": [],
+                    "verifier_reason": "",
+                    "verifier_confidence": 0.0,
+                }
+
+        stdout = io.StringIO()
+        with patch.object(
+            run_m2e2_smoke_module,
+            "parse_args",
+            return_value=argparse.Namespace(input="dummy.jsonl", image_root="dummy_images", sample_id=None, output_dir=None),
+        ), patch.object(
+            run_m2e2_smoke_module,
+            "load_m2e2_samples",
+            return_value=[sample],
+        ), patch(
+            "pathlib.Path.exists",
+            return_value=True,
+        ), patch.object(
+            run_m2e2_smoke_module,
+            "_initialize_rag_runtime",
+        ), patch.object(
+            run_m2e2_smoke_module,
+            "build_graph",
+            return_value=FakeGraph(),
+        ), redirect_stdout(stdout):
+            run_m2e2_smoke_module.main()
+
+        self.assertIn("gold:", stdout.getvalue())
+        self.assertIn("predicted_event:", stdout.getvalue())
+
+    def test_eval_m2e2_agent_uses_sanitized_graph_input_and_offline_gold_comparison(self) -> None:
+        sample = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "sample.jpg",
+            "event_type": "Conflict:Attack",
+            "event_mentions": [
+                {
+                    "event_type": "Conflict:Attack",
+                    "trigger": {"text": "exploded", "start": 2, "end": 3},
+                    "arguments": [{"role": "Place", "text": "market", "start": 5, "end": 6}],
+                }
+            ],
+            "text_event_mentions": [{"event_type": "Conflict:Attack"}],
+            "text_arguments_flat": [{"role": "Place", "text": "market"}],
+            "image_event": {"event_type": "Conflict:Attack"},
+            "image_arguments_flat": [{"role": "Place", "label": "market area"}],
+            "ground_truth": {"event_type": "Conflict:Attack"},
+        }
+
+        class FakeGraph:
+            def invoke(self, state):
+                for forbidden_key in (
+                    "event_type",
+                    "text_event_mentions",
+                    "text_arguments_flat",
+                    "image_event",
+                    "image_arguments_flat",
+                    "ground_truth",
+                ):
+                    if forbidden_key in state or forbidden_key in state.get("fusion_context", {}):
+                        raise AssertionError(f"leaked gold field: {forbidden_key}")
+                return {
+                    **state,
+                    "event": {
+                        "event_type": "Conflict:Attack",
+                        "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
+                        "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
+                        "image_arguments": [],
+                    },
+                    "grounding_results": [],
+                    "verified": True,
+                    "issues": [],
+                }
+
+        with patch.object(eval_m2e2_agent_module, "_initialize_rag_runtime"), patch.object(
+            eval_m2e2_agent_module,
+            "build_graph",
+            return_value=FakeGraph(),
+        ):
+            results = eval_m2e2_agent_module.evaluate_samples([sample], "dummy_images")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["gold"]["event_type"], "Conflict:Attack")
+        self.assertEqual(results[0]["prediction"]["prediction"]["trigger"], {"text": "exploded", "start": 2, "end": 3})
+        self.assertTrue(results[0]["verified"])
+
+    def test_build_stage_trace_record_saves_structured_stage_outputs_without_gold(self) -> None:
+        sample = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "sample.jpg",
+            "event_type": "Conflict:Attack",
+            "ground_truth": {"event_type": "Conflict:Attack"},
+        }
+        agent_input = m2e2_sample_to_agent_state(sample, "dummy_images")
+        final_state = {
+            **agent_input,
+            "event": {
+                "event_type": "Conflict:Attack",
+                "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
+                "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
+                "image_arguments": [],
+            },
+            "prompt_trace": [
+                {
+                    "sample_id": "",
+                    "stage": "extraction_stage_b",
+                    "model_name": "gpt-test",
+                    "prompt_text": "raw_text only",
+                    "image_path": "dummy_images/sample.jpg",
+                    "input_summary": {
+                        "depends_on": ["stage_a_output"],
+                        "stage_a_output": {"event_type": "Conflict:Attack"},
+                    },
+                    "response_text": '{"trigger":{"text":"exploded"}}',
+                    "parsed_output": {"trigger": {"text": "exploded"}},
+                }
+            ],
+            "stage_outputs": {
+                "stage_a_output": {"event_type": "Conflict:Attack"},
+                "stage_b_output": {"trigger": {"text": "exploded"}, "text_arguments": [{"role": "Place", "text": "market"}]},
+                "stage_c_output": {"image_arguments": []},
+                "grounding_requests": [],
+                "verifier_output": {"verified": True, "issues": []},
+                "fusion_context_summary": {"raw_text": sample["text"]},
+                "similar_events_summary": {"text_event_examples": 0, "image_semantic_examples": 0, "bridge_examples": 0},
+                "evidence_summary": {"count": 0, "items": []},
+            },
+            "verified": True,
+            "issues": [],
+            "repair_history": [],
+        }
+
+        trace_record = run_m2e2_smoke_module.build_stage_trace_record(sample, agent_input, final_state)
+
+        self.assertEqual(trace_record["sample_id"], "m2e2_001")
+        self.assertEqual(trace_record["stage_a_output"]["event_type"], "Conflict:Attack")
+        self.assertEqual(trace_record["stage_b_output"]["text_arguments"][0]["role"], "Place")
+        self.assertEqual(trace_record["stage_c_output"]["image_arguments"], [])
+        self.assertEqual(trace_record["grounding_requests"], [])
+        self.assertEqual(trace_record["prompt_trace"][0]["sample_id"], "m2e2_001")
+        self.assertNotIn("ground_truth", trace_record["agent_input"])
+        self.assertNotIn("event_type", trace_record["agent_input"])
+        self.assertNotIn("ground_truth", trace_record["prompt_trace"][0]["prompt_text"])
+
+    def test_eval_save_outputs_writes_predictions_errors_summary_and_trace(self) -> None:
+        results = [
+            {
+                "sample_id": "m2e2_001",
+                "agent_input": {"text": "A bomb exploded in a market", "tokens": ["A"], "raw_image": "sample.jpg"},
+                "gold": extract_m2e2_gold_record(
+                    {
+                        "id": "m2e2_001",
+                        "event_type": "Conflict:Attack",
+                    }
+                ),
+                "prediction": {"id": "m2e2_001", "prediction": {"event_type": "", "trigger": None, "text_arguments": [], "image_arguments": []}},
+                "verified": False,
+                "issues": ["needs review"],
+                "trace": {"sample_id": "m2e2_001", "stage_a_output": {}, "prompt_trace": []},
+            }
+        ]
+
+        output_dir = Path("test_eval_outputs")
+        shutil.rmtree(output_dir, ignore_errors=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            summary = eval_m2e2_agent_module.save_evaluation_outputs(results, output_dir)
+            self.assertTrue((output_dir / "predictions.jsonl").exists())
+            self.assertTrue((output_dir / "errors.jsonl").exists())
+            self.assertTrue((output_dir / "summary.json").exists())
+            self.assertTrue((output_dir / "trace.jsonl").exists())
+            self.assertTrue((output_dir / "per_sample_metrics.jsonl").exists())
+            self.assertEqual(summary["count"], 1)
+            self.assertEqual(summary["error_count"], 1)
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+
+    def test_extraction_trace_makes_stage_dependencies_explicit(self) -> None:
+        state = make_state()
+        state["prompt_trace"] = []
+        state["stage_outputs"] = {}
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": state["image_desc"],
+            "perception_summary": state["perception_summary"],
+            "patterns": empty_layered_similar_events(),
+            "evidence": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.extraction._get_llm",
+            return_value=FakeLLM(
+                [
+                    '{"event_type":"Conflict:Attack"}',
+                    '{"trigger":{"text":"exploded","modality":"text","span":null},"text_arguments":[{"role":"Place","text":"market","span":null}]}',
+                    '{"image_arguments":[{"role":"Place","label":"market area","bbox":null,"grounding_status":"unresolved"}]}',
+                ]
+            ),
+        ):
+            result = extraction(state)
+
+        trace = result["prompt_trace"]
+        stage_b = next(item for item in trace if item["stage"] == "extraction_stage_b")
+        stage_c = next(item for item in trace if item["stage"] == "extraction_stage_c")
+        self.assertEqual(stage_b["input_summary"]["depends_on"], ["stage_a_output"])
+        self.assertEqual(stage_b["input_summary"]["stage_a_output"]["event_type"], "Conflict:Attack")
+        self.assertEqual(stage_c["input_summary"]["depends_on"], ["stage_a_output", "stage_b_output"])
+        self.assertEqual(stage_c["input_summary"]["stage_b_output"]["text_arguments"][0]["role"], "Place")
+
+    def test_trace_record_contains_stage_outputs_and_grounding_outputs(self) -> None:
+        sample = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "sample.jpg",
+        }
+        agent_input = m2e2_sample_to_agent_state(sample, "dummy_images")
+        final_state = {
+            **agent_input,
+            "event": empty_event(),
+            "grounding_results": [{"role": "Place", "label": "market area", "bbox": [1, 2, 3, 4], "grounding_status": "grounded"}],
+            "stage_outputs": {
+                "stage_a_output": {"event_type": "Conflict:Attack"},
+                "stage_b_output": {"trigger": {"text": "exploded"}, "text_arguments": []},
+                "stage_c_output": {"image_arguments": [{"role": "Place", "label": "market area", "bbox": None, "grounding_status": "unresolved"}]},
+                "grounding_requests": [{"role": "Place", "label": "market area", "grounding_query": "Place: market area", "grounding_status": "unresolved"}],
+                "verifier_output": {"verified": True, "issues": []},
+            },
+            "repair_history": [],
+        }
+
+        trace = run_m2e2_smoke_module.build_stage_trace_record(sample, agent_input, final_state)
+
+        self.assertIn("stage_a_output", trace)
+        self.assertIn("stage_b_output", trace)
+        self.assertIn("stage_c_output", trace)
+        self.assertIn("grounding_requests", trace)
+        self.assertIn("grounding_results", trace)
+        self.assertIn("verifier_output", trace)
+
+    def test_smoke_runner_can_save_auditable_artifacts(self) -> None:
+        sample = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "sample.jpg",
+        }
+
+        class FakeGraph:
+            def invoke(self, state):
+                return {
+                    **state,
+                    "event": {
+                        "event_type": "Conflict:Attack",
+                        "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
+                        "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
+                        "image_arguments": [],
+                    },
+                    "grounding_results": [],
+                    "similar_events": empty_layered_similar_events(),
+                    "prompt_trace": [],
+                    "stage_outputs": {
+                        "stage_a_output": {"event_type": "Conflict:Attack"},
+                        "stage_b_output": {"trigger": {"text": "exploded"}, "text_arguments": []},
+                        "stage_c_output": {"image_arguments": []},
+                        "grounding_requests": [],
+                    },
+                    "verified": True,
+                    "issues": [],
+                    "verifier_reason": "",
+                    "verifier_confidence": 0.0,
+                }
+
+        output_dir = Path("test_smoke_outputs")
+        shutil.rmtree(output_dir, ignore_errors=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            stdout = io.StringIO()
+            with patch.object(
+                run_m2e2_smoke_module,
+                "parse_args",
+                return_value=argparse.Namespace(
+                    input="dummy.jsonl",
+                    image_root="dummy_images",
+                    sample_id=None,
+                    output_dir=str(output_dir),
+                ),
+            ), patch.object(
+                run_m2e2_smoke_module,
+                "load_m2e2_samples",
+                return_value=[sample],
+            ), patch(
+                "pathlib.Path.exists",
+                return_value=True,
+            ), patch.object(
+                run_m2e2_smoke_module,
+                "_initialize_rag_runtime",
+            ), patch.object(
+                run_m2e2_smoke_module,
+                "build_graph",
+                return_value=FakeGraph(),
+            ), redirect_stdout(stdout):
+                run_m2e2_smoke_module.main()
+
+            self.assertTrue((output_dir / "predictions.jsonl").exists())
+            self.assertTrue((output_dir / "trace.jsonl").exists())
+            self.assertTrue((output_dir / "errors.jsonl").exists())
+            self.assertTrue((output_dir / "summary.json").exists())
+            self.assertIn("saved_files:", stdout.getvalue())
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+
     def test_image_arguments_without_bbox_must_be_explicitly_unresolved(self) -> None:
         valid = validate_event(
             {
@@ -2468,6 +3289,18 @@ class SmokeTests(unittest.TestCase):
                 },
             ],
         )
+
+    def test_grounding_requests_are_derived_from_stage_c_image_arguments_only(self) -> None:
+        event = {
+            "event_type": "Conflict:Attack",
+            "trigger": None,
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
+            "image_arguments": [],
+        }
+
+        requests = build_grounding_requests(event)
+
+        self.assertEqual(requests, [])
 
     def test_extraction_successful_grounding_writes_bbox_back_into_event(self) -> None:
         state = make_state()
@@ -3083,6 +3916,40 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(updated["image_arguments"][0]["bbox"], [5.0, 6.0, 20.0, 22.0])
         self.assertEqual(updated["image_arguments"][0]["grounding_status"], "grounded")
         self.assertEqual(updated["image_arguments"][1], event["image_arguments"][1])
+
+    def test_apply_grounding_results_to_event_preserves_multiple_same_role_instances(self) -> None:
+        event = {
+            "event_type": "Justice:Arrest-Jail",
+            "trigger": None,
+            "text_arguments": [],
+            "image_arguments": [
+                {"role": "Person", "label": "suspect", "bbox": None, "grounding_status": "unresolved"},
+                {"role": "Person", "label": "suspect", "bbox": None, "grounding_status": "unresolved"},
+            ],
+        }
+        grounding_results = [
+            {
+                "role": "Person",
+                "label": "suspect",
+                "grounding_query": "Person: suspect",
+                "bbox": [1.0, 2.0, 3.0, 4.0],
+                "score": 0.9,
+                "grounding_status": "grounded",
+            },
+            {
+                "role": "Person",
+                "label": "suspect",
+                "grounding_query": "Person: suspect",
+                "bbox": [5.0, 6.0, 7.0, 8.0],
+                "score": 0.85,
+                "grounding_status": "grounded",
+            },
+        ]
+
+        updated = apply_grounding_results_to_event(event, grounding_results)
+
+        self.assertEqual(updated["image_arguments"][0]["bbox"], [1.0, 2.0, 3.0, 4.0])
+        self.assertEqual(updated["image_arguments"][1]["bbox"], [5.0, 6.0, 7.0, 8.0])
 
     def test_grounding_summary_counts_are_correct(self) -> None:
         before_image_arguments = [

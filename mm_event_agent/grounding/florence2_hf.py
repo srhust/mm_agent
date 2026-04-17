@@ -480,12 +480,15 @@ def apply_grounding_results_to_event(event: dict[str, Any], grounding_results: l
     if not isinstance(image_arguments, list):
         return updated_event
 
+    used_result_indexes: set[int] = set()
     for item in image_arguments:
         if not isinstance(item, dict):
             continue
         if item.get("bbox") is not None or item.get("grounding_status") != "unresolved":
             continue
-        for result in grounding_results:
+        for index, result in enumerate(grounding_results):
+            if index in used_result_indexes:
+                continue
             if (
                 isinstance(result, dict)
                 and result.get("grounding_status") == "grounded"
@@ -495,5 +498,6 @@ def apply_grounding_results_to_event(event: dict[str, Any], grounding_results: l
             ):
                 item["bbox"] = list(result["bbox"])
                 item["grounding_status"] = "grounded"
+                used_result_indexes.add(index)
                 break
     return updated_event

@@ -27,10 +27,12 @@ from mm_event_agent.schemas import (
     empty_event,
     extract_json_object,
     find_text_span,
+    normalize_text_argument_boundary,
     parse_event_json,
     resolve_text_token_sequence,
     validate_event,
 )
+from mm_event_agent.trace_utils import append_prompt_trace, append_repair_history, merge_stage_outputs, safe_image_reference
 
 _llm: ChatOpenAI | None = None
 
@@ -68,7 +70,9 @@ def _perception_image_signal(perception_summary: str) -> str:
 
 
 def _has_usable_image_evidence(raw_image: Any, raw_image_desc: str, perception_summary: str) -> bool:
-    if raw_image is not None:
+    if isinstance(raw_image, (bytes, bytearray)):
+        return True
+    if isinstance(raw_image, str) and raw_image.strip():
         return True
     if str(raw_image_desc or "").strip():
         return True
@@ -305,6 +309,34 @@ def _finalize_targeted_text_grounding(
     return finalized
 
 
+def _normalize_text_argument_boundaries(
+    event: dict[str, Any],
+    text_tokens: list[str],
+) -> dict[str, Any]:
+    normalized = deepcopy(event)
+    text_arguments = normalized.get("text_arguments")
+    if not isinstance(text_arguments, list):
+        return normalized
+    rebuilt: list[dict[str, Any]] = []
+    for item in text_arguments:
+        if not isinstance(item, dict):
+            continue
+        normalized_text, normalized_span = normalize_text_argument_boundary(
+            str(item.get("text") or ""),
+            item.get("span"),
+            text_tokens,
+        )
+        rebuilt.append(
+            {
+                **item,
+                "text": normalized_text,
+                "span": normalized_span,
+            }
+        )
+    normalized["text_arguments"] = rebuilt
+    return normalized
+
+
 def _format_evidence_items(raw: Any) -> str:
     if not isinstance(raw, list) or not raw:
         return "(none)"
@@ -405,6 +437,31 @@ def _restore_grounded_bboxes_from_current_event(
     return restored
 
 
+def _drop_flagged_weak_image_arguments(
+    event: dict[str, Any],
+    repair_plan: list[dict[str, str]],
+) -> dict[str, Any]:
+    flagged_indexes: set[int] = set()
+    for item in repair_plan:
+        if item.get("issue_type") != "generic_weak_place":
+            continue
+        match = re.match(r"image_arguments\[(\d+)\]", str(item.get("field_path") or ""))
+        if match:
+            flagged_indexes.add(int(match.group(1)))
+    if not flagged_indexes:
+        return event
+    updated = deepcopy(event)
+    image_arguments = updated.get("image_arguments")
+    if not isinstance(image_arguments, list):
+        return updated
+    updated["image_arguments"] = [
+        item
+        for index, item in enumerate(image_arguments)
+        if index not in flagged_indexes
+    ]
+    return updated
+
+
 def repair(state: Mapping[str, Any]) -> dict[str, Any]:
     """Read data + control context, write repaired event and repair_attempts only."""
     started_at = time.perf_counter()
@@ -464,6 +521,13 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         "- If grounding failed, do not force deletion of an otherwise acceptable unresolved image argument.\n"
         "- Do not hallucinate image_arguments in text-only mode when there is no usable image evidence.\n"
         "- Do not force one-to-one alignment between text_arguments and image_arguments; partial overlap is acceptable.\n"
+        "- Remove weak generic Place-like image arguments such as street, road, outdoors, outside, scene, background, area, or crowd when verifier diagnostics flag them.\n"
+        "- Preserve multiple valid image arguments for the same role when they refer to distinct image-side candidates.\n"
+        "- Do not create image grounding candidates by copying text arguments into image_arguments.\n"
+        "- Shrink text arguments to the preferred head word whenever possible.\n"
+        "- Remove determiners like a/an/the from text arguments.\n"
+        "- Remove obvious quantity words and broad modifier-heavy prefixes when a shorter head word preserves the role meaning.\n"
+        "- Preserve already valid token spans unless the repair target explicitly requires changing them.\n"
         "- If a grounded bbox already exists, preserve it unless the diagnosed issue specifically requires changing it.\n"
         "- event_type must stay within the supported closed ontology.\n"
         "- text_arguments roles must be valid for the chosen event_type.\n"
@@ -491,6 +555,7 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
     )
 
     attempts = int(state.get("repair_attempts") or 0) + 1
+    audit_enabled = "prompt_trace" in state or "stage_outputs" in state or "repair_history" in state
     grounding_debug = compare_grounding_stages(
         current_event.get("image_arguments"),
         grounding_results,
@@ -517,6 +582,7 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_results,
             repair_plan,
         )
+        merged_candidate = _drop_flagged_weak_image_arguments(merged_candidate, repair_plan)
         merged_candidate = _sanitize_image_arguments_for_mode(
             merged_candidate,
             raw_image=raw_image,
@@ -525,10 +591,13 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
         )
         repaired_event, _, _ = align_text_grounded_event(
             validate_event(
-                _finalize_targeted_text_grounding(
-                    validate_event(merged_candidate),
-                    target_field_paths,
-                    raw_text,
+                _normalize_text_argument_boundaries(
+                    _finalize_targeted_text_grounding(
+                        validate_event(merged_candidate),
+                        target_field_paths,
+                        raw_text,
+                        text_tokens,
+                    ),
                     text_tokens,
                 )
             ),
@@ -550,10 +619,43 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_results=grounding_results,
             evidence=raw_evidence_items,
         )
-        result = {
-            "event": repaired_event,
-            "repair_attempts": attempts,
-        }
+        result = {"event": repaired_event, "repair_attempts": attempts}
+        if audit_enabled:
+            repair_history = append_repair_history(
+                state,
+                {
+                    "attempt": attempts,
+                    "issues": state.get("issues") if isinstance(state.get("issues"), list) else [],
+                    "verifier_diagnostics": state.get("verifier_diagnostics")
+                    if isinstance(state.get("verifier_diagnostics"), list)
+                    else [],
+                    "event_before": current_event,
+                    "event_after": repaired_event,
+                },
+            )
+            result["prompt_trace"] = append_prompt_trace(
+                state,
+                {
+                    "sample_id": "",
+                    "stage": "repair",
+                    "model_name": settings.openai_model,
+                    "prompt_text": prompt,
+                    "image_path": safe_image_reference(raw_image),
+                    "input_summary": {
+                        "depends_on": ["verifier_output", "current_event"],
+                        "current_event": current_event,
+                        "verifier_issues": state.get("issues") if isinstance(state.get("issues"), list) else [],
+                        "verifier_diagnostics": state.get("verifier_diagnostics")
+                        if isinstance(state.get("verifier_diagnostics"), list)
+                        else [],
+                        "grounding_results": grounding_results if isinstance(grounding_results, list) else [],
+                    },
+                    "response_text": raw,
+                    "parsed_output": parsed_object if isinstance(parsed_object, dict) else {},
+                },
+            )
+            result["repair_history"] = repair_history
+            result["stage_outputs"] = merge_stage_outputs(state, {"repair_history": repair_history})
         log_node_event(
             "repair",
             state,
@@ -588,10 +690,44 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             grounding_results=grounding_results,
             evidence=raw_evidence_items,
         )
-        result = {
-            "event": fallback_event,
-            "repair_attempts": attempts,
-        }
+        result = {"event": fallback_event, "repair_attempts": attempts}
+        if audit_enabled:
+            repair_history = append_repair_history(
+                state,
+                {
+                    "attempt": attempts,
+                    "issues": state.get("issues") if isinstance(state.get("issues"), list) else [],
+                    "verifier_diagnostics": state.get("verifier_diagnostics")
+                    if isinstance(state.get("verifier_diagnostics"), list)
+                    else [],
+                    "event_before": current_event,
+                    "event_after": fallback_event,
+                    "error": str(exc),
+                },
+            )
+            result["prompt_trace"] = append_prompt_trace(
+                state,
+                {
+                    "sample_id": "",
+                    "stage": "repair",
+                    "model_name": settings.openai_model,
+                    "prompt_text": prompt,
+                    "image_path": safe_image_reference(raw_image),
+                    "input_summary": {
+                        "depends_on": ["verifier_output", "current_event"],
+                        "current_event": current_event,
+                        "verifier_issues": state.get("issues") if isinstance(state.get("issues"), list) else [],
+                        "verifier_diagnostics": state.get("verifier_diagnostics")
+                        if isinstance(state.get("verifier_diagnostics"), list)
+                        else [],
+                        "grounding_results": grounding_results if isinstance(grounding_results, list) else [],
+                    },
+                    "response_text": str(exc),
+                    "parsed_output": {},
+                },
+            )
+            result["repair_history"] = repair_history
+            result["stage_outputs"] = merge_stage_outputs(state, {"repair_history": repair_history})
         log_node_event(
             "repair",
             state,

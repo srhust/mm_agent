@@ -1,0 +1,58 @@
+{
+  "text": "A bomb exploded in a market",
+  "tokens": [
+    "A",
+    "bomb",
+    "exploded",
+    "in",
+    "a",
+    "market"
+  ],
+  "raw_image": "dummy_images\\sample.jpg",
+  "event_type_mode": "closed_set",
+  "image_desc": "",
+  "perception_summary": "",
+  "search_query": "",
+  "similar_events": {
+    "text_event_examples": [],
+    "image_semantic_examples": [],
+    "bridge_examples": []
+  },
+  "evidence": [],
+  "fusion_context": {
+    "raw_text": "A bomb exploded in a market",
+    "raw_image_desc": "",
+    "perception_summary": "",
+    "text_tokens": [
+      "A",
+      "bomb",
+      "exploded",
+      "in",
+      "a",
+      "market"
+    ],
+    "patterns": {
+      "text_event_examples": [],
+      "image_semantic_examples": [],
+      "bridge_examples": []
+    },
+    "evidence": []
+  },
+  "event": {
+    "event_type": "",
+    "trigger": null,
+    "text_arguments": [],
+    "image_arguments": []
+  },
+  "grounding_results": [],
+  "memory": [],
+  "prompt_trace": [],
+  "stage_outputs": {},
+  "repair_history": [],
+  "verified": false,
+  "issues": [],
+  "verifier_diagnostics": [],
+  "verifier_confidence": 0.0,
+  "verifier_reason": "",
+  "repair_attempts": 0
+}

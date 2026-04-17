@@ -1,0 +1,1 @@
+{"id": "m2e2_001", "prediction": {"event_type": "Conflict:Attack", "trigger": {"text": "exploded", "start": 2, "end": 3}, "text_arguments": [{"role": "Place", "text": "market", "start": 5, "end": 6}], "image_arguments": []}, "verified": true, "issues": [], "verifier_reason": "", "similar_events_summary": {"text": 0, "image": 0, "bridge": 0}}

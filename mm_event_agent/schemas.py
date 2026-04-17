@@ -258,6 +258,36 @@ def attach_retrieval_metadata(
 
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?|[^\w\s]", re.UNICODE)
+_DETERMINER_TOKENS = {
+    "a",
+    "an",
+    "the",
+    "this",
+    "that",
+    "these",
+    "those",
+}
+_QUANTITY_TOKENS = {
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "several",
+    "many",
+    "few",
+    "multiple",
+    "single",
+    "dozens",
+    "dozen",
+    "hundreds",
+    "thousands",
+}
 
 
 def tokenize_text(text: str) -> list[str]:
@@ -336,12 +366,11 @@ def parse_event_json(text: str) -> Event:
 
 
 def _is_matching_span(span: TextSpan | None, source_tokens: list[str], value: str) -> bool:
-    if not isinstance(span, dict):
+    normalized_span = normalize_text_span(span)
+    if normalized_span is None:
         return False
-    start = span.get("start")
-    end = span.get("end")
-    if not isinstance(start, int) or not isinstance(end, int):
-        return False
+    start = normalized_span["start"]
+    end = normalized_span["end"]
     if start < 0 or end < start or end > len(source_tokens):
         return False
     return source_tokens[start:end] == tokenize_text(value)
@@ -352,6 +381,114 @@ def _unique_exact_span(source_tokens: list[str], value: str) -> TextSpan | None:
     if len(occurrences) == 1:
         return occurrences[0]
     return None
+
+
+def _is_punctuation_token(token: str) -> bool:
+    return bool(token) and bool(re.fullmatch(r"[^\w\s]+", token))
+
+
+def _is_quantity_token(token: str) -> bool:
+    normalized = str(token or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized in _QUANTITY_TOKENS:
+        return True
+    return normalized.isdigit()
+
+
+def _looks_like_proper_name(tokens: list[str]) -> bool:
+    lexical = [token for token in tokens if token and not _is_punctuation_token(token)]
+    if len(lexical) < 2:
+        return False
+    for token in lexical:
+        if not token[0].isupper():
+            return False
+    return True
+
+
+def _preferred_argument_token_slice(tokens: list[str]) -> tuple[int, int]:
+    if not tokens:
+        return 0, 0
+    start = 0
+    end = len(tokens)
+
+    while start < end and _is_punctuation_token(tokens[start]):
+        start += 1
+    while end > start and _is_punctuation_token(tokens[end - 1]):
+        end -= 1
+    while start < end and (
+        tokens[start].lower() in _DETERMINER_TOKENS
+        or _is_quantity_token(tokens[start])
+    ):
+        start += 1
+
+    if start >= end:
+        return 0, len(tokens)
+
+    trimmed = tokens[start:end]
+    if _looks_like_proper_name(trimmed):
+        return start, end
+    if len(trimmed) == 1:
+        return start, end
+    return end - 1, end
+
+
+def normalize_text_argument_boundary(
+    text: str,
+    span: TextSpan | None,
+    source_tokens: list[str],
+) -> tuple[str, TextSpan | None]:
+    normalized_span = normalize_text_span(span)
+    if normalized_span is None:
+        return str(text or "").strip(), None
+    start = normalized_span["start"]
+    end = normalized_span["end"]
+    if start < 0 or end > len(source_tokens) or end <= start:
+        return str(text or "").strip(), normalized_span
+    mention_tokens = source_tokens[start:end]
+    slice_start, slice_end = _preferred_argument_token_slice(mention_tokens)
+    shrunk_tokens = mention_tokens[slice_start:slice_end]
+    if not shrunk_tokens:
+        shrunk_tokens = mention_tokens
+        slice_start = 0
+        slice_end = len(mention_tokens)
+    return (
+        " ".join(shrunk_tokens),
+        {"start": start + slice_start, "end": start + slice_end},
+    )
+
+
+def describe_text_argument_normalization(
+    text: str,
+    span: TextSpan | None,
+    source_tokens: list[str],
+) -> dict[str, Any]:
+    normalized_text, normalized_span = normalize_text_argument_boundary(text, span, source_tokens)
+    original_text = str(text or "").strip()
+    original_span = normalize_text_span(span)
+    original_tokens = tokenize_text(original_text)
+    details = {
+        "normalized_text": normalized_text,
+        "normalized_span": normalized_span,
+        "has_determiner": False,
+        "has_quantity": False,
+        "is_broader_than_preferred": False,
+    }
+    if original_span is None:
+        return details
+    span_tokens = source_tokens[original_span["start"] : original_span["end"]]
+    if span_tokens:
+        details["has_determiner"] = span_tokens[0].lower() in _DETERMINER_TOKENS
+        details["has_quantity"] = _is_quantity_token(span_tokens[0])
+    details["is_broader_than_preferred"] = (
+        normalized_span is not None
+        and (
+            normalized_span["start"] != original_span["start"]
+            or normalized_span["end"] != original_span["end"]
+            or tokenize_text(normalized_text) != original_tokens
+        )
+    )
+    return details
 
 
 def align_text_grounded_event(
@@ -367,12 +504,12 @@ def align_text_grounded_event(
     aligned_trigger: Trigger | None = None
     if trigger is not None:
         trigger_text = str(trigger.get("text") or "")
-        trigger_span = trigger.get("span") if isinstance(trigger.get("span"), dict) else None
+        trigger_span = normalize_text_span(trigger.get("span"))
         if _is_matching_span(trigger_span, source_tokens, trigger_text):
             aligned_trigger = {
                 "text": trigger_text,
                 "modality": "text",
-                "span": trigger_span,
+                "span": normalize_text_span(trigger_span),
             }
         else:
             realigned = _unique_exact_span(source_tokens, trigger_text)
@@ -396,23 +533,25 @@ def align_text_grounded_event(
     aligned_text_arguments: list[TextArgument] = []
     for index, item in enumerate(event["text_arguments"]):
         text = str(item.get("text") or "")
-        span = item.get("span") if isinstance(item.get("span"), dict) else None
+        span = normalize_text_span(item.get("span"))
         if _is_matching_span(span, source_tokens, text):
+            normalized_text, normalized_span = normalize_text_argument_boundary(text, span, source_tokens)
             aligned_text_arguments.append(
                 {
                     "role": item["role"],
-                    "text": text,
-                    "span": span,
+                    "text": normalized_text,
+                    "span": normalized_span,
                 }
             )
             continue
         realigned = _unique_exact_span(source_tokens, text)
         if realigned is not None:
+            normalized_text, normalized_span = normalize_text_argument_boundary(text, realigned, source_tokens)
             aligned_text_arguments.append(
                 {
                     "role": item["role"],
-                    "text": text,
-                    "span": realigned,
+                    "text": normalized_text,
+                    "span": normalized_span,
                 }
             )
             continue
@@ -611,7 +750,18 @@ def _validate_image_argument(data: Any, event_type: str) -> ImageArgument:
     }
 
 
-def _validate_span(span: Any) -> list[int] | None:
+def _validate_span(span: Any) -> TextSpan | None:
+    normalized_span = normalize_text_span(span)
+    if normalized_span is None:
+        if span is None:
+            return None
+        raise ValidationError('span must be null, {"start": int, "end": int}, or [start, end]')
+    if normalized_span["start"] < 0 or normalized_span["end"] < normalized_span["start"]:
+        raise ValidationError("span values must be valid non-negative integers")
+    return normalized_span
+
+
+def normalize_text_span(span: Any) -> TextSpan | None:
     if span is None:
         return None
     if isinstance(span, dict):
@@ -620,9 +770,9 @@ def _validate_span(span: Any) -> list[int] | None:
     elif isinstance(span, list) and len(span) == 2:
         start, end = span
     else:
-        raise ValidationError('span must be null, {"start": int, "end": int}, or [start, end]')
-    if not isinstance(start, int) or not isinstance(end, int) or start < 0 or end < start:
-        raise ValidationError("span values must be valid non-negative integers")
+        return None
+    if not isinstance(start, int) or not isinstance(end, int):
+        return None
     return {"start": start, "end": end}
 
 

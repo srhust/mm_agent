@@ -80,13 +80,21 @@ RAG_EVENT_CORPUS = {
 }
 
 
-def _initialize_rag_runtime() -> None:
-    """Keep the current demo corpus as the default local RAG runtime."""
+def _initialize_rag_runtime() -> str:
+    """Initialize RAG according to runtime feature flags.
+
+    Persistent mode must not build the demo in-memory corpus. We still clear
+    any demo in-memory state when demo retrieval is disabled by passing
+    ``None`` into the compatibility-layer builder.
+    """
+    if settings.rag_use_persistent_index:
+        build_index(None)
+        return "persistent"
     if settings.rag_use_demo_corpus:
         build_index(RAG_EVENT_CORPUS)
-        return
-    # Future persistent-index initialization will live behind flags.
+        return "demo"
     build_index(None)
+    return "disabled"
 
 
 def main() -> None:

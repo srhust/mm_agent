@@ -1,0 +1,13 @@
+{
+  "sample_id": "m2e2_001",
+  "event_type": null,
+  "trigger": null,
+  "arguments": [],
+  "text_event_mentions": [],
+  "text_arguments_flat": [],
+  "image_event": null,
+  "image_arguments_flat": [],
+  "ground_truth": null,
+  "labels": null,
+  "annotations": null
+}
