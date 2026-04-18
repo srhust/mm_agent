@@ -4,11 +4,13 @@ import argparse
 from contextlib import redirect_stdout
 from dataclasses import replace
 import io
+import json
 import os
 from pathlib import Path
 import tempfile
 import shutil
 import unittest
+import uuid
 import mm_event_agent.nodes.extraction as extraction_module
 import mm_event_agent.main as main_module
 import mm_event_agent.nodes.perception as perception_module
@@ -3084,7 +3086,7 @@ class SmokeTests(unittest.TestCase):
             }
         ]
 
-        output_dir = Path("test_eval_outputs")
+        output_dir = Path(f"test_eval_outputs_{uuid.uuid4().hex}")
         shutil.rmtree(output_dir, ignore_errors=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -3096,6 +3098,197 @@ class SmokeTests(unittest.TestCase):
             self.assertTrue((output_dir / "per_sample_metrics.jsonl").exists())
             self.assertEqual(summary["count"], 1)
             self.assertEqual(summary["error_count"], 1)
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+
+    def test_eval_incremental_writing_appends_per_sample_and_updates_summary(self) -> None:
+        sample_one = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "sample1.jpg",
+        }
+        sample_two = {
+            "id": "m2e2_002",
+            "text": "Police arrested a man",
+            "words": ["Police", "arrested", "a", "man"],
+            "image": "sample2.jpg",
+        }
+
+        class FakeGraph:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def invoke(self, state):
+                self.calls += 1
+                event_type = "Conflict:Attack" if self.calls == 1 else "Justice:Arrest-Jail"
+                return {
+                    **state,
+                    "event": {
+                        "event_type": event_type,
+                        "trigger": {"text": "exploded" if self.calls == 1 else "arrested", "modality": "text", "span": {"start": 2 if self.calls == 1 else 1, "end": 3 if self.calls == 1 else 2}},
+                        "text_arguments": [],
+                        "image_arguments": [],
+                    },
+                    "grounding_results": [],
+                    "verified": self.calls == 1,
+                    "issues": [] if self.calls == 1 else ["needs review"],
+                    "prompt_trace": [],
+                    "stage_outputs": {},
+                }
+
+        output_dir = Path(f"test_eval_incremental_outputs_{uuid.uuid4().hex}")
+        shutil.rmtree(output_dir, ignore_errors=True)
+        try:
+            with patch.object(eval_m2e2_agent_module, "_initialize_rag_runtime"), patch.object(
+                eval_m2e2_agent_module,
+                "build_graph",
+                return_value=FakeGraph(),
+            ):
+                summary = eval_m2e2_agent_module.run_incremental_evaluation(
+                    [sample_one, sample_two],
+                    "dummy_images",
+                    output_dir,
+                    resume=False,
+                )
+
+            predictions_lines = (output_dir / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
+            trace_lines = (output_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+            metric_lines = (output_dir / "per_sample_metrics.jsonl").read_text(encoding="utf-8").splitlines()
+            error_lines = (output_dir / "errors.jsonl").read_text(encoding="utf-8").splitlines()
+            summary_on_disk = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(len(predictions_lines), 2)
+            self.assertEqual(len(trace_lines), 2)
+            self.assertEqual(len(metric_lines), 2)
+            self.assertEqual(len(error_lines), 1)
+            self.assertEqual(summary["count"], 2)
+            self.assertEqual(summary["error_count"], 1)
+            self.assertEqual(summary_on_disk["count"], 2)
+            self.assertEqual(summary_on_disk["verified_count"], 1)
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+
+    def test_eval_resume_skips_already_processed_ids(self) -> None:
+        sample_one = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "sample1.jpg",
+        }
+        sample_two = {
+            "id": "m2e2_002",
+            "text": "Police arrested a man",
+            "words": ["Police", "arrested", "a", "man"],
+            "image": "sample2.jpg",
+        }
+
+        class RecordingGraph:
+            def __init__(self) -> None:
+                self.sample_ids: list[str] = []
+
+            def invoke(self, state):
+                raw_image = str(state.get("raw_image") or "")
+                self.sample_ids.append(Path(raw_image).name)
+                return {
+                    **state,
+                    "event": empty_event(),
+                    "grounding_results": [],
+                    "verified": True,
+                    "issues": [],
+                    "prompt_trace": [],
+                    "stage_outputs": {},
+                }
+
+        output_dir = Path(f"test_eval_resume_outputs_{uuid.uuid4().hex}")
+        shutil.rmtree(output_dir, ignore_errors=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            (output_dir / "predictions.jsonl").write_text(
+                json.dumps({"id": "m2e2_001", "prediction": {"event_type": "", "trigger": None, "text_arguments": [], "image_arguments": []}}, ensure_ascii=False)
+                + "\n",
+                encoding="utf-8",
+            )
+            (output_dir / "per_sample_metrics.jsonl").write_text(
+                json.dumps({"sample_id": "m2e2_001", "verified": True, "issue_count": 0}, ensure_ascii=False)
+                + "\n",
+                encoding="utf-8",
+            )
+            graph = RecordingGraph()
+            with patch.object(eval_m2e2_agent_module, "_initialize_rag_runtime"), patch.object(
+                eval_m2e2_agent_module,
+                "build_graph",
+                return_value=graph,
+            ):
+                summary = eval_m2e2_agent_module.run_incremental_evaluation(
+                    [sample_one, sample_two],
+                    "dummy_images",
+                    output_dir,
+                    resume=True,
+                )
+
+            predictions_lines = (output_dir / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(predictions_lines), 2)
+            self.assertEqual(summary["count"], 2)
+            self.assertEqual(summary["skipped_count"], 1)
+            self.assertEqual(graph.sample_ids, ["sample2.jpg"])
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+
+    def test_eval_partial_outputs_remain_readable_after_interruption(self) -> None:
+        sample_one = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "sample1.jpg",
+        }
+        sample_two = {
+            "id": "m2e2_002",
+            "text": "Police arrested a man",
+            "words": ["Police", "arrested", "a", "man"],
+            "image": "sample2.jpg",
+        }
+
+        class FailingGraph:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def invoke(self, state):
+                self.calls += 1
+                if self.calls == 2:
+                    raise RuntimeError("boom")
+                return {
+                    **state,
+                    "event": empty_event(),
+                    "grounding_results": [],
+                    "verified": True,
+                    "issues": [],
+                    "prompt_trace": [],
+                    "stage_outputs": {},
+                }
+
+        output_dir = Path(f"test_eval_interruption_outputs_{uuid.uuid4().hex}")
+        shutil.rmtree(output_dir, ignore_errors=True)
+        try:
+            with patch.object(eval_m2e2_agent_module, "_initialize_rag_runtime"), patch.object(
+                eval_m2e2_agent_module,
+                "build_graph",
+                return_value=FailingGraph(),
+            ):
+                with self.assertRaises(RuntimeError):
+                    eval_m2e2_agent_module.run_incremental_evaluation(
+                        [sample_one, sample_two],
+                        "dummy_images",
+                        output_dir,
+                        resume=False,
+                    )
+
+            predictions_lines = (output_dir / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
+            trace_lines = (output_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+            summary_on_disk = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(predictions_lines), 1)
+            self.assertEqual(len(trace_lines), 1)
+            self.assertEqual(summary_on_disk["count"], 1)
         finally:
             shutil.rmtree(output_dir, ignore_errors=True)
 
@@ -3195,7 +3388,7 @@ class SmokeTests(unittest.TestCase):
                     "verifier_confidence": 0.0,
                 }
 
-        output_dir = Path("test_smoke_outputs")
+        output_dir = Path(f"test_smoke_outputs_{uuid.uuid4().hex}")
         shutil.rmtree(output_dir, ignore_errors=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         try:

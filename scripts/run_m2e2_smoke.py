@@ -155,6 +155,143 @@ def build_stage_trace_record(sample: Mapping[str, Any], agent_input: Mapping[str
     }
 
 
+def append_jsonl_record(path: str | Path, record: Mapping[str, Any]) -> None:
+    target_path = Path(path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    with target_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(dict(record), ensure_ascii=False) + "\n")
+        handle.flush()
+
+
+def safe_write_summary(path: str | Path, summary_obj: Mapping[str, Any]) -> None:
+    target_path = Path(path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(json.dumps(dict(summary_obj), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def read_existing_processed_ids(output_dir: str | Path) -> set[str]:
+    target_dir = Path(output_dir)
+    processed: set[str] = set()
+    for filename, id_key in (("predictions.jsonl", "id"), ("errors.jsonl", "sample_id")):
+        path = target_dir / filename
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            payload = line.strip()
+            if not payload:
+                continue
+            try:
+                record = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, Mapping):
+                continue
+            value = record.get(id_key)
+            if value is not None and str(value).strip():
+                processed.add(str(value).strip())
+    return processed
+
+
+def build_prediction_record(sample: Mapping[str, Any], final_state: Mapping[str, Any]) -> dict[str, Any]:
+    return agent_output_to_m2e2_prediction(sample, final_state)
+
+
+def build_eval_result_record(
+    sample: Mapping[str, Any],
+    image_root: str | Path,
+    final_state: Mapping[str, Any],
+) -> dict[str, Any]:
+    agent_input = m2e2_sample_to_agent_state(sample, image_root)
+    gold = extract_m2e2_gold_record(sample)
+    prediction = build_prediction_record(sample, final_state)
+    return {
+        "sample_id": gold.get("sample_id"),
+        "agent_input": agent_input,
+        "gold": gold,
+        "prediction": prediction,
+        "verified": bool(final_state.get("verified")),
+        "issues": list(final_state.get("issues", [])) if isinstance(final_state.get("issues"), list) else [],
+        "trace": build_stage_trace_record(sample, agent_input, final_state),
+    }
+
+
+def initialize_output_paths(output_dir: str | Path) -> dict[str, str]:
+    target_dir = Path(output_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    files = {
+        "predictions": str(target_dir / "predictions.jsonl"),
+        "trace": str(target_dir / "trace.jsonl"),
+        "errors": str(target_dir / "errors.jsonl"),
+        "summary": str(target_dir / "summary.json"),
+        "per_sample_metrics": str(target_dir / "per_sample_metrics.jsonl"),
+    }
+    for key in ("predictions", "trace", "errors", "per_sample_metrics"):
+        path = Path(files[key])
+        with path.open("a", encoding="utf-8"):
+            pass
+    return files
+
+
+def build_progress_summary(
+    *,
+    count: int,
+    verified_count: int,
+    error_count: int,
+    skipped_count: int,
+    files: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "count": int(count),
+        "verified_count": int(verified_count),
+        "error_count": int(error_count),
+        "skipped_count": int(skipped_count),
+        "files": dict(files),
+    }
+
+
+def write_result_record(
+    output_dir: str | Path,
+    result: Mapping[str, Any],
+    *,
+    count: int,
+    verified_count: int,
+    error_count: int,
+    skipped_count: int = 0,
+) -> dict[str, Any]:
+    files = initialize_output_paths(output_dir)
+    prediction = result.get("prediction") if isinstance(result.get("prediction"), Mapping) else {}
+    append_jsonl_record(files["predictions"], prediction if isinstance(prediction, Mapping) else {})
+    append_jsonl_record(files["trace"], result.get("trace") if isinstance(result.get("trace"), Mapping) else {})
+    append_jsonl_record(
+        files["per_sample_metrics"],
+        {
+            "sample_id": result.get("sample_id"),
+            "verified": bool(result.get("verified")),
+            "issue_count": len(result.get("issues", [])) if isinstance(result.get("issues"), list) else 0,
+        },
+    )
+
+    issues = result.get("issues")
+    if isinstance(issues, list) and issues:
+        append_jsonl_record(
+            files["errors"],
+            {
+                "sample_id": result.get("sample_id"),
+                "issues": issues,
+            },
+        )
+
+    summary = build_progress_summary(
+        count=count,
+        verified_count=verified_count,
+        error_count=error_count,
+        skipped_count=skipped_count,
+        files=files,
+    )
+    safe_write_summary(files["summary"], summary)
+    return summary
+
+
 def save_smoke_artifacts(
     output_dir: str | Path,
     *,
@@ -163,51 +300,23 @@ def save_smoke_artifacts(
     prediction: Mapping[str, Any],
     final_state: Mapping[str, Any],
 ) -> dict[str, str]:
-    target_dir = Path(output_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    sample_id = get_m2e2_sample_id(sample) or "sample"
-    stage_trace = build_stage_trace_record(sample, agent_input, final_state)
-    predictions_path = target_dir / "predictions.jsonl"
-    trace_path = target_dir / "trace.jsonl"
-    errors_path = target_dir / "errors.jsonl"
-    summary_path = target_dir / "summary.json"
-    per_sample_metrics_path = target_dir / "per_sample_metrics.jsonl"
-    predictions_path.write_text(json.dumps(prediction, ensure_ascii=False) + "\n", encoding="utf-8")
-    trace_path.write_text(json.dumps(stage_trace, ensure_ascii=False) + "\n", encoding="utf-8")
-    issues = list(final_state.get("issues", [])) if isinstance(final_state.get("issues"), list) else []
-    if issues:
-        errors_path.write_text(
-            json.dumps({"sample_id": sample_id, "issues": issues}, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-    else:
-        errors_path.write_text("", encoding="utf-8")
-    per_sample_metrics_path.write_text(
-        json.dumps(
-            {
-                "sample_id": sample_id,
-                "verified": bool(final_state.get("verified")),
-                "issue_count": len(issues),
-            },
-            ensure_ascii=False,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    summary = {
-        "count": 1,
-        "verified_count": 1 if final_state.get("verified") else 0,
-        "error_count": 1 if issues else 0,
-        "files": {
-            "predictions": str(predictions_path),
-            "trace": str(trace_path),
-            "errors": str(errors_path),
-            "summary": str(summary_path),
-            "per_sample_metrics": str(per_sample_metrics_path),
-        },
+    result = {
+        "sample_id": get_m2e2_sample_id(sample) or "sample",
+        "agent_input": dict(agent_input),
+        "prediction": dict(prediction),
+        "verified": bool(final_state.get("verified")),
+        "issues": list(final_state.get("issues", [])) if isinstance(final_state.get("issues"), list) else [],
+        "trace": build_stage_trace_record(sample, agent_input, final_state),
     }
-    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    return summary["files"]
+    summary = write_result_record(
+        output_dir,
+        result,
+        count=1,
+        verified_count=1 if result["verified"] else 0,
+        error_count=1 if result["issues"] else 0,
+        skipped_count=0,
+    )
+    return dict(summary["files"])
 
 def main() -> None:
     args = parse_args()
