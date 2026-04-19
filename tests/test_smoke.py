@@ -98,6 +98,8 @@ def make_state() -> dict:
         "text": "A bomb exploded in a market",
         "raw_image": "tests://fixtures/market-scene.jpg",
         "event_type_mode": "closed_set",
+        "run_mode": "open_world",
+        "effective_search_enabled": True,
         # Current bridge representation derived from raw_image.
         "image_desc": "market area with smoke and people running",
         "perception_summary": "",
@@ -134,6 +136,9 @@ class SmokeTests(unittest.TestCase):
         self.assertFalse(loaded.rag_use_persistent_index)
         self.assertTrue(loaded.rag_use_demo_corpus)
         self.assertEqual(loaded.rag_index_root, "data/rag/indexes")
+        self.assertEqual(loaded.run_mode, "benchmark")
+        self.assertFalse(loaded.enable_search)
+        self.assertFalse(loaded.effective_search_enabled)
         self.assertEqual(loaded.rag_qwen_model_path, "")
         self.assertEqual(loaded.rag_qwen_device, "cuda:0")
         self.assertEqual(loaded.rag_qwen_dtype, "bfloat16")
@@ -912,6 +917,34 @@ class SmokeTests(unittest.TestCase):
         self.assertIsInstance(result["evidence"][0]["score"], float)
         self.assertEqual(result["evidence"][0]["published_at"], "2026-04-12")
 
+    def test_search_node_benchmark_mode_skips_external_search(self) -> None:
+        state = make_state()
+        state["run_mode"] = "benchmark"
+        state["effective_search_enabled"] = False
+
+        with patch("mm_event_agent.nodes.search.search_news") as mock_search_news:
+            result = search(state)
+
+        mock_search_news.assert_not_called()
+        self.assertEqual(result["search_query"], "A bomb exploded in a market")
+        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["run_mode"], "benchmark")
+        self.assertFalse(result["effective_search_enabled"])
+
+    def test_search_node_open_world_mode_respects_disabled_search_flag(self) -> None:
+        state = make_state()
+        state["run_mode"] = "open_world"
+        state["effective_search_enabled"] = False
+
+        with patch("mm_event_agent.nodes.search.search_news") as mock_search_news:
+            result = search(state)
+
+        mock_search_news.assert_not_called()
+        self.assertEqual(result["search_query"], "A bomb exploded in a market")
+        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["run_mode"], "open_world")
+        self.assertFalse(result["effective_search_enabled"])
+
     def test_tavily_adapter_failure_does_not_crash_pipeline(self) -> None:
         client = TavilySearchClient(api_key="test-key", endpoint="https://example.test/search")
 
@@ -967,6 +1000,9 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(settings.event_type_mode, "closed_set")
         self.assertFalse(settings.debug)
         self.assertEqual(settings.log_level, "INFO")
+        self.assertEqual(settings.run_mode, "benchmark")
+        self.assertFalse(settings.enable_search)
+        self.assertFalse(settings.effective_search_enabled)
         self.assertEqual(settings.openai_model, "gpt-4o-mini")
         self.assertEqual(settings.tavily_endpoint, "https://api.tavily.com/search")
         self.assertEqual(settings.search_top_k, 3)
@@ -979,6 +1015,8 @@ class SmokeTests(unittest.TestCase):
                 "MM_EVENT_TYPE_MODE": "transfer",
                 "MM_EVENT_DEBUG": "true",
                 "MM_AGENT_LOG_LEVEL": "DEBUG",
+                "MM_EVENT_RUN_MODE": "open_world",
+                "MM_EVENT_ENABLE_SEARCH": "true",
                 "OPENAI_API_KEY": "sk-test",
                 "OPENAI_MODEL": "gpt-test",
                 "OPENAI_BASE_URL": "https://example.test/v1",
@@ -1002,6 +1040,9 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(settings.event_type_mode, "transfer")
         self.assertTrue(settings.debug)
         self.assertEqual(settings.log_level, "DEBUG")
+        self.assertEqual(settings.run_mode, "open_world")
+        self.assertTrue(settings.enable_search)
+        self.assertTrue(settings.effective_search_enabled)
         self.assertEqual(settings.openai_api_key, "sk-test")
         self.assertEqual(settings.openai_model, "gpt-test")
         self.assertEqual(settings.openai_base_url, "https://example.test/v1")
@@ -1034,6 +1075,46 @@ class SmokeTests(unittest.TestCase):
             client = TavilySearchClient()
             self.assertFalse(client.configured)
             self.assertEqual(client.search("market bombing"), [])
+
+    def test_runtime_config_benchmark_mode_forces_search_off(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "MM_EVENT_RUN_MODE": "benchmark",
+                "MM_EVENT_ENABLE_SEARCH": "true",
+            },
+            clear=True,
+        ):
+            settings = runtime_config.load_settings()
+
+        self.assertEqual(settings.run_mode, "benchmark")
+        self.assertTrue(settings.enable_search)
+        self.assertFalse(settings.effective_search_enabled)
+
+    def test_runtime_config_open_world_mode_respects_search_flag(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "MM_EVENT_RUN_MODE": "open_world",
+                "MM_EVENT_ENABLE_SEARCH": "false",
+            },
+            clear=True,
+        ):
+            disabled = runtime_config.load_settings()
+        with patch.dict(
+            os.environ,
+            {
+                "MM_EVENT_RUN_MODE": "open_world",
+                "MM_EVENT_ENABLE_SEARCH": "true",
+            },
+            clear=True,
+        ):
+            enabled = runtime_config.load_settings()
+
+        self.assertEqual(disabled.run_mode, "open_world")
+        self.assertFalse(disabled.effective_search_enabled)
+        self.assertEqual(enabled.run_mode, "open_world")
+        self.assertTrue(enabled.effective_search_enabled)
 
     def test_search_node_drops_obviously_irrelevant_results_when_possible(self) -> None:
         state = make_state()
@@ -1072,6 +1153,24 @@ class SmokeTests(unittest.TestCase):
 
         self.assertEqual(result["search_query"], "A bomb exploded in a market")
         self.assertEqual(result["evidence"], [])
+
+    def test_fusion_audit_summary_includes_mode_info_with_empty_evidence(self) -> None:
+        state = make_state()
+        state["run_mode"] = "benchmark"
+        state["effective_search_enabled"] = False
+        state["perception_summary"] = "summary"
+        state["prompt_trace"] = []
+        state["stage_outputs"] = {}
+        state["evidence"] = []
+
+        result = fusion(state)
+
+        summary = result["stage_outputs"]["fusion_context_summary"]
+        self.assertEqual(summary["run_mode"], "benchmark")
+        self.assertFalse(summary["effective_search_enabled"])
+        self.assertEqual(summary["evidence_count"], 0)
+        self.assertEqual(summary["evidence_summary"]["count"], 0)
+        self.assertEqual(result["fusion_context"]["evidence"], [])
 
     def test_filtered_evidence_remains_schema_valid(self) -> None:
         state = make_state()
@@ -3020,6 +3119,8 @@ class SmokeTests(unittest.TestCase):
         agent_input = m2e2_sample_to_agent_state(sample, "dummy_images")
         final_state = {
             **agent_input,
+            "run_mode": "benchmark",
+            "effective_search_enabled": False,
             "event": {
                 "event_type": "Conflict:Attack",
                 "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
@@ -3059,6 +3160,8 @@ class SmokeTests(unittest.TestCase):
         trace_record = run_m2e2_smoke_module.build_stage_trace_record(sample, agent_input, final_state)
 
         self.assertEqual(trace_record["sample_id"], "m2e2_001")
+        self.assertEqual(trace_record["run_mode"], "benchmark")
+        self.assertFalse(trace_record["effective_search_enabled"])
         self.assertEqual(trace_record["stage_a_output"]["event_type"], "Conflict:Attack")
         self.assertEqual(trace_record["stage_b_output"]["text_arguments"][0]["role"], "Place")
         self.assertEqual(trace_record["stage_c_output"]["image_arguments"], [])
@@ -3082,7 +3185,13 @@ class SmokeTests(unittest.TestCase):
                 "prediction": {"id": "m2e2_001", "prediction": {"event_type": "", "trigger": None, "text_arguments": [], "image_arguments": []}},
                 "verified": False,
                 "issues": ["needs review"],
-                "trace": {"sample_id": "m2e2_001", "stage_a_output": {}, "prompt_trace": []},
+                "trace": {
+                    "sample_id": "m2e2_001",
+                    "run_mode": "open_world",
+                    "effective_search_enabled": True,
+                    "stage_a_output": {},
+                    "prompt_trace": [],
+                },
             }
         ]
 
@@ -3090,7 +3199,12 @@ class SmokeTests(unittest.TestCase):
         shutil.rmtree(output_dir, ignore_errors=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         try:
-            summary = eval_m2e2_agent_module.save_evaluation_outputs(results, output_dir)
+            with patch.object(
+                run_m2e2_smoke_module,
+                "settings",
+                replace(run_m2e2_smoke_module.settings, run_mode="open_world", enable_search=True),
+            ):
+                summary = eval_m2e2_agent_module.save_evaluation_outputs(results, output_dir)
             self.assertTrue((output_dir / "predictions.jsonl").exists())
             self.assertTrue((output_dir / "errors.jsonl").exists())
             self.assertTrue((output_dir / "summary.json").exists())
@@ -3098,6 +3212,15 @@ class SmokeTests(unittest.TestCase):
             self.assertTrue((output_dir / "per_sample_metrics.jsonl").exists())
             self.assertEqual(summary["count"], 1)
             self.assertEqual(summary["error_count"], 1)
+            self.assertEqual(summary["run_mode"], "open_world")
+            self.assertTrue(summary["effective_search_enabled"])
+
+            saved_trace = json.loads((output_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            saved_summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved_trace["run_mode"], "open_world")
+            self.assertTrue(saved_trace["effective_search_enabled"])
+            self.assertEqual(saved_summary["run_mode"], "open_world")
+            self.assertTrue(saved_summary["effective_search_enabled"])
         finally:
             shutil.rmtree(output_dir, ignore_errors=True)
 

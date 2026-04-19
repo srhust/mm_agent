@@ -7,8 +7,23 @@ import time
 from typing import Any, Mapping
 
 from mm_event_agent.observability import log_node_event
+from mm_event_agent.runtime_config import settings
 from mm_event_agent.schemas import FusionContext, empty_fusion_context, empty_layered_similar_events
 from mm_event_agent.trace_utils import append_prompt_trace, merge_stage_outputs
+
+
+def _run_mode(state: Mapping[str, Any]) -> str:
+    value = state.get("run_mode")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return settings.run_mode
+
+
+def _effective_search_enabled(state: Mapping[str, Any]) -> bool:
+    value = state.get("effective_search_enabled")
+    if isinstance(value, bool):
+        return value
+    return settings.effective_search_enabled
 
 
 def fusion(state: Mapping[str, Any]) -> dict[str, Any]:
@@ -17,6 +32,8 @@ def fusion(state: Mapping[str, Any]) -> dict[str, Any]:
     try:
         evidence = state.get("evidence")
         raw_patterns = state.get("similar_events")
+        run_mode = _run_mode(state)
+        effective_search_enabled = _effective_search_enabled(state)
         fusion_context: FusionContext = {
             "raw_text": str(state.get("text") or ""),
             # Keep using the derived image description in fusion_context until
@@ -37,6 +54,9 @@ def fusion(state: Mapping[str, Any]) -> dict[str, Any]:
             "items": fusion_context["evidence"],
         }
         fusion_context_summary = {
+            "run_mode": run_mode,
+            "effective_search_enabled": effective_search_enabled,
+            "evidence_count": len(fusion_context["evidence"]),
             "raw_text": fusion_context["raw_text"],
             "raw_image_desc": fusion_context["raw_image_desc"],
             "perception_summary": fusion_context["perception_summary"],
@@ -54,6 +74,8 @@ def fusion(state: Mapping[str, Any]) -> dict[str, Any]:
                     "prompt_text": "Assemble fusion_context from sanitized text, image-side context, retrieval patterns, and evidence.",
                     "image_path": None,
                     "input_summary": {
+                        "run_mode": run_mode,
+                        "effective_search_enabled": effective_search_enabled,
                         "text_length": len(fusion_context["raw_text"]),
                         "has_image_desc": bool(fusion_context["raw_image_desc"]),
                         "has_perception_summary": bool(fusion_context["perception_summary"]),
@@ -77,6 +99,8 @@ def fusion(state: Mapping[str, Any]) -> dict[str, Any]:
             state,
             started_at,
             True,
+            run_mode=run_mode,
+            effective_search_enabled=effective_search_enabled,
             fusion_patterns=(
                 len(fusion_context["patterns"]["text_event_examples"])
                 + len(fusion_context["patterns"]["image_semantic_examples"])

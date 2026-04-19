@@ -40,6 +40,7 @@ from scripts.run_m2e2_smoke import (
     initialize_output_paths,
     load_m2e2_samples,
     read_existing_processed_ids,
+    resolve_runtime_mode_info,
     safe_write_summary,
     write_result_record,
 )
@@ -65,8 +66,11 @@ def evaluate_sample(
     final_state = graph.invoke(agent_input)
     gold = extract_m2e2_gold_record(sample)
     prediction = agent_output_to_m2e2_prediction(sample, final_state)
+    mode_info = resolve_runtime_mode_info(final_state)
     return {
         "sample_id": gold.get("sample_id"),
+        "run_mode": mode_info["run_mode"],
+        "effective_search_enabled": mode_info["effective_search_enabled"],
         "agent_input": agent_input,
         "gold": gold,
         "prediction": prediction,

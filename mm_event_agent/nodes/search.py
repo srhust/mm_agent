@@ -137,23 +137,102 @@ def _filter_and_rerank_evidence(evidence: list[EvidenceItem], query_text: str, s
     return [item for _, _, item in ranked[:top_k]]
 
 
+def _run_mode(state: Mapping[str, Any]) -> str:
+    value = state.get("run_mode")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return settings.run_mode
+
+
+def _effective_search_enabled(state: Mapping[str, Any]) -> bool:
+    value = state.get("effective_search_enabled")
+    if isinstance(value, bool):
+        return value
+    return settings.effective_search_enabled
+
+
 def search(state: Mapping[str, Any]) -> dict[str, Any]:
     """Read only data field text and write only data field evidence."""
     started_at = time.perf_counter()
     source_text = str(state.get("text") or "")
     q = _rewrite_query(source_text)
+    run_mode = _run_mode(state)
+    effective_search_enabled = _effective_search_enabled(state)
     if not q:
-        result = {"search_query": "", "evidence": []}
-        log_node_event("search", state, started_at, True, search_query="", returned_evidence=0)
+        result = {
+            "search_query": "",
+            "evidence": [],
+            "run_mode": run_mode,
+            "effective_search_enabled": effective_search_enabled,
+        }
+        log_node_event(
+            "search",
+            state,
+            started_at,
+            True,
+            run_mode=run_mode,
+            effective_search_enabled=effective_search_enabled,
+            search_query="",
+            returned_evidence=0,
+        )
+        return result
+    if not effective_search_enabled:
+        disabled_reason = "run_mode" if run_mode == "benchmark" else "config"
+        result = {
+            "search_query": q,
+            "evidence": [],
+            "run_mode": run_mode,
+            "effective_search_enabled": False,
+        }
+        log_node_event(
+            "search",
+            state,
+            started_at,
+            True,
+            run_mode=run_mode,
+            effective_search_enabled=False,
+            search_query=q,
+            returned_evidence=0,
+            search_disabled_reason=disabled_reason,
+        )
         return result
     try:
         evidence = _filter_and_rerank_evidence(_validate_evidence_list(search_news(q)), query_text=q, source_text=source_text)
-        result = {"search_query": q, "evidence": evidence}
-        log_node_event("search", state, started_at, True, search_query=q, returned_evidence=len(evidence))
+        result = {
+            "search_query": q,
+            "evidence": evidence,
+            "run_mode": run_mode,
+            "effective_search_enabled": True,
+        }
+        log_node_event(
+            "search",
+            state,
+            started_at,
+            True,
+            run_mode=run_mode,
+            effective_search_enabled=True,
+            search_query=q,
+            returned_evidence=len(evidence),
+        )
         return result
     except Exception as exc:
-        result = {"search_query": q, "evidence": []}
-        log_node_event("search", state, started_at, False, search_query=q, error=str(exc), returned_evidence=0)
+        result = {
+            "search_query": q,
+            "evidence": [],
+            "run_mode": run_mode,
+            "effective_search_enabled": effective_search_enabled,
+        }
+        log_node_event(
+            "search",
+            state,
+            started_at,
+            False,
+            run_mode=run_mode,
+            effective_search_enabled=effective_search_enabled,
+            search_query=q,
+            error=str(exc),
+            returned_evidence=0,
+        )
         return result
 
 

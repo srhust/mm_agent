@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
+VALID_RUN_MODES = frozenset({"benchmark", "open_world"})
+
 
 def _env_str(name: str, default: str = "") -> str:
     raw = os.getenv(name)
@@ -40,11 +42,24 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _normalize_run_mode(value: str, default: str = "benchmark") -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in VALID_RUN_MODES:
+        return normalized
+    return default
+
+
+def _effective_search_enabled(run_mode: str, enable_search: bool) -> bool:
+    return run_mode == "open_world" and bool(enable_search)
+
+
 @dataclass(frozen=True)
 class Settings:
     event_type_mode: str
     debug: bool
     log_level: str
+    run_mode: str
+    enable_search: bool
 
     openai_api_key: str
     openai_model: str
@@ -109,12 +124,18 @@ class Settings:
     rag_bridge_top_k: int
     rag_enable_image_query: bool
 
+    @property
+    def effective_search_enabled(self) -> bool:
+        return _effective_search_enabled(self.run_mode, self.enable_search)
+
 
 def load_settings() -> Settings:
     return Settings(
         event_type_mode=_env_str("MM_EVENT_TYPE_MODE", "closed_set") or "closed_set",
         debug=_env_flag("MM_EVENT_DEBUG", False),
         log_level=_env_str("MM_AGENT_LOG_LEVEL", "INFO") or "INFO",
+        run_mode=_normalize_run_mode(_env_str("MM_EVENT_RUN_MODE", "benchmark"), default="benchmark"),
+        enable_search=_env_flag("MM_EVENT_ENABLE_SEARCH", False),
         openai_api_key=_env_str("OPENAI_API_KEY", ""),
         openai_model=_env_str("OPENAI_MODEL", "gpt-4o-mini") or "gpt-4o-mini",
         openai_base_url=_env_str("OPENAI_BASE_URL", ""),

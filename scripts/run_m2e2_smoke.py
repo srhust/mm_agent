@@ -32,6 +32,7 @@ from mm_event_agent.m2e2_adapter import (
     m2e2_sample_to_agent_state,
 )
 from mm_event_agent.main import _initialize_rag_runtime
+from mm_event_agent.runtime_config import settings
 
 
 def parse_args() -> argparse.Namespace:
@@ -101,8 +102,23 @@ def summarize_similar_events(similar_events: Any) -> dict[str, int]:
     }
 
 
+def resolve_runtime_mode_info(final_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    state = final_state if isinstance(final_state, Mapping) else {}
+    run_mode = state.get("run_mode")
+    if not isinstance(run_mode, str) or not run_mode.strip():
+        run_mode = settings.run_mode
+    effective_search_enabled = state.get("effective_search_enabled")
+    if not isinstance(effective_search_enabled, bool):
+        effective_search_enabled = settings.effective_search_enabled
+    return {
+        "run_mode": run_mode,
+        "effective_search_enabled": effective_search_enabled,
+    }
+
+
 def build_stage_trace_record(sample: Mapping[str, Any], agent_input: Mapping[str, Any], final_state: Mapping[str, Any]) -> dict[str, Any]:
     sample_id = get_m2e2_sample_id(sample)
+    mode_info = resolve_runtime_mode_info(final_state)
     prompt_trace = final_state.get("prompt_trace")
     normalized_prompt_trace: list[dict[str, Any]] = []
     if isinstance(prompt_trace, list):
@@ -117,6 +133,8 @@ def build_stage_trace_record(sample: Mapping[str, Any], agent_input: Mapping[str
         stage_outputs = {}
     return {
         "sample_id": sample_id,
+        "run_mode": mode_info["run_mode"],
+        "effective_search_enabled": mode_info["effective_search_enabled"],
         "agent_input": dict(agent_input),
         "prompt_trace": normalized_prompt_trace,
         "perception_output": {
@@ -239,12 +257,24 @@ def build_progress_summary(
     error_count: int,
     skipped_count: int,
     files: Mapping[str, Any],
+    run_mode: str | None = None,
+    effective_search_enabled: bool | None = None,
 ) -> dict[str, Any]:
+    mode_info = resolve_runtime_mode_info(
+        {
+            "run_mode": run_mode if isinstance(run_mode, str) else settings.run_mode,
+            "effective_search_enabled": effective_search_enabled
+            if isinstance(effective_search_enabled, bool)
+            else settings.effective_search_enabled,
+        }
+    )
     return {
         "count": int(count),
         "verified_count": int(verified_count),
         "error_count": int(error_count),
         "skipped_count": int(skipped_count),
+        "run_mode": mode_info["run_mode"],
+        "effective_search_enabled": mode_info["effective_search_enabled"],
         "files": dict(files),
     }
 

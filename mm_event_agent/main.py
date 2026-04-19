@@ -106,6 +106,8 @@ def main() -> None:
         "text": "A bomb exploded in a market",
         "raw_image": "example://images/market-scene.jpg",
         "event_type_mode": settings.event_type_mode,
+        "run_mode": settings.run_mode,
+        "effective_search_enabled": settings.effective_search_enabled,
         # image_desc is currently derived from raw_image outside this demo entry.
         "image_desc": "people running, smoke",
         "perception_summary": "",

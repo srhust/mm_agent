@@ -34,6 +34,9 @@ class AgentState(TypedDict):
     raw_image: Any
     # Stage A event type selection mode: "closed_set" or "transfer".
     event_type_mode: str
+    # Experimental runtime mode for leakage-safe evaluation behavior.
+    run_mode: str
+    effective_search_enabled: bool
     # Current derived intermediate representation of raw_image used by the
     # existing image-side extraction and verification path.
     image_desc: str
