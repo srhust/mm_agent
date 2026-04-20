@@ -35,6 +35,8 @@ from mm_event_agent.schemas import (
 from mm_event_agent.trace_utils import append_prompt_trace, merge_stage_outputs, safe_image_reference
 
 _llm: ChatOpenAI | None = None
+PROMPT_NAME = "verifier_multimodal_consistency"
+PROMPT_VERSION = "m2e2_verifier_v2"
 _GENERIC_WEAK_PLACE_LABELS = {
     "street",
     "road",
@@ -55,6 +57,17 @@ ROLE_CONFUSION_GUIDANCE = [
     "Entity vs Participant: Entity is used for demonstrators or communicators depending on the event schema, while Participant is used for people or groups in a meeting.",
     "Victim vs Target: Victim is the person who dies in Life:Die, while Target is the person, object, or place under attack in Conflict:Attack.",
 ]
+
+
+def _resolve_run_mode(state: Mapping[str, Any] | None) -> str:
+    value = state.get("run_mode") if isinstance(state, Mapping) else None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return settings.run_mode
+
+
+def _is_benchmark_mode(run_mode: str) -> bool:
+    return str(run_mode or "").strip() == "benchmark"
 
 
 def _get_llm() -> ChatOpenAI:
@@ -341,6 +354,15 @@ def _validate_text_argument_fields(
                             "suggested_action": "shrink_to_head_word",
                         }
                     )
+                if normalization["has_person_title_prefix"]:
+                    issues.append(f"text argument includes person title prefix at index {index}")
+                    diagnostics.append(
+                        {
+                            "field_path": f"text_arguments[{index}].text",
+                            "issue_type": "contains_person_title_prefix",
+                            "suggested_action": "strip_person_title_prefix",
+                        }
+                    )
                 if normalization["is_broader_than_preferred"]:
                     issues.append(f"text argument is not normalized to preferred head-word span at index {index}")
                     diagnostics.append(
@@ -619,6 +641,76 @@ def _merge_diagnostics(
     return merged
 
 
+def _build_verifier_prompt(
+    *,
+    run_mode: str,
+    fusion_context: Mapping[str, Any],
+    event: Mapping[str, Any],
+    grounding_results: Any,
+    raw_text: str,
+    raw_image_desc: str,
+    perception_summary: str,
+    evidence_items: list[Any],
+    raw_event_type: str,
+) -> str:
+    if is_supported_event_type(raw_event_type):
+        selected_schema_block = format_event_schema_for_prompt(raw_event_type)
+        allowed_text_roles = get_allowed_text_roles(raw_event_type)
+        allowed_image_roles = get_allowed_image_roles(raw_event_type)
+    else:
+        selected_schema_block = "(event_type is missing or unsupported)"
+        allowed_text_roles = []
+        allowed_image_roles = []
+    confusion_block = "\n".join(f"- {line}" for line in ROLE_CONFUSION_GUIDANCE)
+    if _is_benchmark_mode(run_mode):
+        return (
+            "Benchmark verifier for staged multimodal event extraction.\n"
+            "Verify the current event against the same fusion_context used during extraction.\n\n"
+            "Selected event schema only:\n"
+            f"{selected_schema_block}\n\n"
+            f"Allowed text roles: {json.dumps(allowed_text_roles, ensure_ascii=False)}\n"
+            f"Allowed image roles: {json.dumps(allowed_image_roles, ensure_ascii=False)}\n\n"
+            "Targeted contrastive checks:\n"
+            f"{confusion_block}\n\n"
+            "Verification rules:\n"
+            "- Focus on the selected event_type and its role semantics only.\n"
+            "- text_arguments and image_arguments are modality-specific and do not require one-to-one alignment.\n"
+            "- Enforce strict benchmark text normalization: minimal head-word mentions, no determiners, no unnecessary adjectives, token spans are [start, end).\n"
+            "- For person mentions, flag unnecessary prefixes such as President, former President, Mr., Mrs., Ms., Dr., Officer, police officer, Mayor, Governor, Senator, Sen., Representative, Rep., Judge, Justice, Professor, General, Coach, or Captain when a shorter exact person-name span exists in raw_text.\n"
+            "- Treat weak generic Place-like image labels conservatively.\n"
+            "- Prefer omission over unsupported arguments.\n"
+            "- Use grounding results when present, but failed grounding is not automatically fatal.\n"
+            "- Output strict JSON only.\n\n"
+            'Return ONLY one JSON object: {"verdict": "YES" or "NO", "issues": [...], "confidence": 0.0, "reason": "short explanation", "diagnostics": [{"field_path": "...", "issue_type": "...", "suggested_action": "..."}]}\n\n'
+            f"fusion_context:\n{json.dumps(fusion_context, ensure_ascii=False)}\n\n"
+            f"grounding_results:\n{json.dumps(grounding_results if isinstance(grounding_results, list) else [], ensure_ascii=False)}\n\n"
+            f"Structured event:\n{json.dumps(event, ensure_ascii=False)}"
+        )
+    ontology_block = format_full_ontology_for_prompt()
+    return (
+        "Open-world verifier for staged multimodal event extraction.\n"
+        "Verify an extracted event JSON against the same structured fusion_context used at extraction time.\n\n"
+        "Ontology semantics:\n"
+        f"{ontology_block}\n\n"
+        "Predicted event_type schema focus:\n"
+        f"{selected_schema_block}\n\n"
+        "Role confusion checks:\n"
+        f"{confusion_block}\n\n"
+        "Checks:\n"
+        "1) Ontology: event_type must be supported and arguments must fit that event schema.\n"
+        "2) Text support: trigger and text arguments must be supported by fusion_context.raw_text, with benchmark-style minimal head-word normalization.\n"
+        "   Person mentions should also drop unnecessary titles or honorifics before the exact person name when a shorter span exists in raw_text.\n"
+        "3) Modality-specific support: text and image roles are separate evidence views, not one-to-one copies.\n"
+        "4) Image support: weak generic Place-like labels should remain conservative even if grounded.\n"
+        "5) Evidence support: evidence snippets may support claims when present.\n"
+        "6) Structure: preserve valid schema and prefer grounded support over pattern hints.\n\n"
+        'Return ONLY one JSON object: {"verdict": "YES" or "NO", "issues": [...], "confidence": 0.0, "reason": "short explanation", "diagnostics": [{"field_path": "...", "issue_type": "...", "suggested_action": "..."}]}\n\n'
+        f"fusion_context:\n{json.dumps(fusion_context, ensure_ascii=False)}\n\n"
+        f"grounding_results:\n{json.dumps(grounding_results if isinstance(grounding_results, list) else [], ensure_ascii=False)}\n\n"
+        f"Structured event:\n{json.dumps(event, ensure_ascii=False)}"
+    )
+
+
 def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
     """Verify against fused raw_text plus derived raw_image_desc context."""
     started_at = time.perf_counter()
@@ -682,54 +774,17 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
         evidence=evidence_items,
     )
     audit_enabled = "prompt_trace" in state or "stage_outputs" in state
-
-    ontology_block = format_full_ontology_for_prompt()
-    if is_supported_event_type(raw_event_type):
-        selected_schema_block = format_event_schema_for_prompt(raw_event_type)
-    else:
-        selected_schema_block = "(event_type is missing or unsupported)"
-    confusion_block = "\n".join(f"- {line}" for line in ROLE_CONFUSION_GUIDANCE)
-
-    prompt = (
-        "You verify an extracted event JSON against the SAME structured fusion_context used at extraction time.\n\n"
-        "Ontology semantics:\n"
-        f"{ontology_block}\n\n"
-        "Predicted event_type schema focus:\n"
-        f"{selected_schema_block}\n\n"
-        "Role confusion checks:\n"
-        f"{confusion_block}\n\n"
-        "Checks:\n"
-        "1) Ontology: Is event.event_type in the supported ontology, does it semantically match the event definition and trigger hints, and are text/image roles valid for that event_type?\n"
-        "Use the role definitions and extraction notes to decide whether arguments fit the intended meaning of each role.\n"
-        "Decide whether the trigger meaning fits the predicted event type, not just whether the trigger token appears in text.\n"
-        "Check whether text argument roles are semantically appropriate for their mentions.\n"
-        "Check whether image argument roles are semantically appropriate for their labels.\n"
-        "Pay special attention to the listed closely related role confusions and flag them when the event uses the wrong role despite using an allowed role name.\n"
-        "2) Text support: Are event.trigger.text and event.text_arguments supported by fusion_context.raw_text? "
-        "Interpret spans as token spans [start, end), not character offsets.\n"
-        "Text arguments should be normalized to the preferred canonical head-word form: no determiners, no obvious quantity words, and no broad modifier-heavy spans when a shorter head-word span is available.\n"
-        "3) Modality-specific support: Treat text_arguments and image_arguments as separate evidence views, not a one-to-one alignment requirement.\n"
-        "A valid text-only run may have empty image_arguments.\n"
-        "A valid multimodal run may have partial overlap across modalities.\n"
-        "Only flag cross-modal issues when there is a direct contradiction for the same role or when image arguments appear without usable image evidence.\n"
-        "4) Image support: Are event.image_arguments supported by fusion_context.raw_image_desc and perception_summary, the derived image-side representations of the primary raw image input when available? "
-        'Unresolved image arguments are allowed only when grounding_status is "unresolved".\n'
-        "If an image argument is marked grounded and has a bbox, treat that as stronger image-side support.\n"
-        "Generic weak Place-like labels such as street, road, outdoors, outside, scene, background, area, or crowd should still be treated conservatively even when grounded, because they may only describe backdrop context rather than an event-relevant place role.\n"
-        "If grounding_results contain a grounded match for a role/label pair, unresolved image arguments for that same pair may indicate an inconsistency.\n"
-        "If grounding_results show failed grounding, do not over-penalize otherwise acceptable unresolved image arguments.\n"
-        "5) Evidence support: Are event claims supported by fusion_context.evidence item snippets when evidence items are available? "
-        "Use evidence snippets as the primary factual basis for externally supported facts.\n"
-        "6) Structure: Is the event schema valid, including trigger/text_arguments/image_arguments shape and types, and is it consistent with "
-        "fusion_context.patterns when patterns are available?\n"
-        "7) If text, image, and evidence conflict with patterns, prefer grounded support over patterns.\n\n"
-        "Return ONLY one JSON object (no markdown), exactly this shape:\n"
-        '{"verdict": "YES" or "NO", "issues": ["unsupported argument", "wrong event type", ...], "confidence": 0.0, "reason": "short explanation", "diagnostics": [{"field_path": "trigger.span", "issue_type": "span_mismatch", "suggested_action": "realign_or_drop"}]}\n'
-        "Use an empty issues array when verdict is YES. Confidence must be a float from 0 to 1. "
-        "Reason must be a short explanation. diagnostics is optional but should be included when you can localize a field-level problem.\n\n"
-        f"fusion_context:\n{json.dumps(fusion_context, ensure_ascii=False)}\n\n"
-        f"grounding_results:\n{json.dumps(grounding_results if isinstance(grounding_results, list) else [], ensure_ascii=False)}\n\n"
-        f"Structured event:\n{json.dumps(event, ensure_ascii=False)}"
+    run_mode = _resolve_run_mode(state)
+    prompt = _build_verifier_prompt(
+        run_mode=run_mode,
+        fusion_context=fusion_context,
+        event=event,
+        grounding_results=grounding_results,
+        raw_text=raw_text,
+        raw_image_desc=raw_image_desc,
+        perception_summary=perception_summary,
+        evidence_items=evidence_items,
+        raw_event_type=raw_event_type,
     )
 
     try:
@@ -772,10 +827,14 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
                 {
                     "sample_id": "",
                     "stage": "verifier",
+                    "prompt_name": PROMPT_NAME,
+                    "prompt_version": PROMPT_VERSION,
+                    "run_mode": run_mode,
                     "model_name": settings.openai_model,
                     "prompt_text": prompt,
                     "image_path": safe_image_reference(raw_image),
                     "input_summary": {
+                        "run_mode": run_mode,
                         "fusion_context_summary": {
                             "raw_text": raw_text,
                             "raw_image_desc": raw_image_desc,
@@ -839,10 +898,14 @@ def verifier(state: Mapping[str, Any]) -> dict[str, Any]:
                 {
                     "sample_id": "",
                     "stage": "verifier",
+                    "prompt_name": PROMPT_NAME,
+                    "prompt_version": PROMPT_VERSION,
+                    "run_mode": run_mode,
                     "model_name": settings.openai_model,
                     "prompt_text": prompt,
                     "image_path": safe_image_reference(raw_image),
                     "input_summary": {
+                        "run_mode": run_mode,
                         "fusion_context_summary": {
                             "raw_text": raw_text,
                             "raw_image_desc": raw_image_desc,

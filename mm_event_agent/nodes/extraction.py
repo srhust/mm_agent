@@ -20,6 +20,7 @@ from mm_event_agent.ontology import (
     format_full_ontology_for_prompt,
     format_image_role_visibility_guidance_for_prompt,
     get_allowed_image_roles,
+    get_event_schema,
     get_allowed_text_roles,
     get_supported_event_types,
 )
@@ -42,6 +43,10 @@ from mm_event_agent.grounding.florence2_hf import (
 )
 
 _llm: ChatOpenAI | None = None
+PROMPT_VERSION = "m2e2_staged_v2"
+STAGE_A_PROMPT_NAME = "stage_a_event_type_selection"
+STAGE_B_PROMPT_NAME = "stage_b_text_extraction"
+STAGE_C_PROMPT_NAME = "stage_c_image_semantic_candidates"
 _GENERIC_WEAK_PLACE_LABELS = {
     "street",
     "road",
@@ -53,6 +58,11 @@ _GENERIC_WEAK_PLACE_LABELS = {
     "area",
     "crowd",
 }
+_STAGE_A_CONFUSABLE_PAIRS = [
+    "Justice:Arrest-Jail vs Conflict:Demonstrate: detention by authorities is not a protest crowd scene.",
+    "Conflict:Attack vs Life:Die: choose Attack when the central event is the harmful action, not only the death outcome.",
+    "Contact:Meet vs Contact:Phone-Write: in-person co-presence is not remote communication.",
+]
 
 
 def _get_llm() -> ChatOpenAI:
@@ -154,6 +164,9 @@ def _extract_stage_json(prompt: str, *, raw_image: Any = None) -> dict[str, Any]
 def _invoke_traced_stage(
     state: Mapping[str, Any],
     *,
+    prompt_name: str,
+    prompt_version: str,
+    run_mode: str,
     stage: str,
     prompt: str,
     input_summary: Mapping[str, Any],
@@ -169,6 +182,9 @@ def _invoke_traced_stage(
     trace_record = {
         "sample_id": "",
         "stage": stage,
+        "prompt_name": prompt_name,
+        "prompt_version": prompt_version,
+        "run_mode": run_mode,
         "model_name": settings.extraction_model_name,
         "prompt_text": prompt,
         "image_path": safe_image_reference(raw_image),
@@ -208,6 +224,251 @@ def _has_usable_image_evidence(raw_image: Any, raw_image_desc: str, perception_s
     if _build_image_content_block(raw_image) is not None:
         return True
     return _has_valid_image_side_context(raw_image_desc, perception_summary)
+
+
+def _resolve_run_mode(state: Mapping[str, Any] | None) -> str:
+    value = state.get("run_mode") if isinstance(state, Mapping) else None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return settings.run_mode
+
+
+def _is_benchmark_mode(run_mode: str) -> bool:
+    return str(run_mode or "").strip() == "benchmark"
+
+
+def _format_benchmark_event_selection_guidance() -> str:
+    lines: list[str] = []
+    for event_type in get_supported_event_types():
+        schema = get_event_schema(event_type)
+        if not isinstance(schema, dict):
+            continue
+        definition = str(schema.get("definition") or "").strip()
+        trigger_hint = str(schema.get("trigger_hint") or "").strip()
+        lines.append(f"- {event_type}: {definition} Trigger hint: {trigger_hint}")
+    return "\n".join(lines) if lines else "(none)"
+
+
+def _build_stage_a_prompt(
+    *,
+    run_mode: str,
+    raw_text: str,
+    image_side_info: str,
+    evidence_items: list[Any],
+    formatted_text_event_examples_topk: str,
+    formatted_bridge_examples_topk: str,
+    normalized_mode: str,
+) -> str:
+    allowed_event_types = get_supported_event_types()
+    confusable_pairs_block = "\n".join(f"- {line}" for line in _STAGE_A_CONFUSABLE_PAIRS)
+    benchmark_guidance = _format_benchmark_event_selection_guidance()
+    if normalized_mode == "transfer":
+        selection_rule = (
+            "Choose exactly one supported event type, or return \"Unsupported\" when the input does not clearly fit the ontology.\n"
+            'Return ONLY JSON: {"event_type": "<one supported label or Unsupported>"}'
+        )
+    else:
+        selection_rule = (
+            "Choose exactly one supported event type from the closed benchmark set.\n"
+            'Return ONLY JSON: {"event_type": "<one allowed label>"}'
+        )
+    if _is_benchmark_mode(run_mode):
+        return (
+            "Stage A benchmark event type selection.\n"
+            "Decide the single main central event using text and image evidence jointly.\n"
+            f"{selection_rule}\n"
+            "Rules:\n"
+            "- Choose exactly one event type.\n"
+            "- Prefer the main central event, not background context, aftermath, or side activity.\n"
+            "- Use both raw_text and image-side evidence for event type selection.\n"
+            "- The later trigger must come from raw_text, so do not choose an event type that only fits vague background imagery.\n"
+            "- Handle confusable pairs conservatively.\n"
+            "- Use retrieved text event examples as pattern guidance only.\n"
+            "- Use cross-modal bridge hints only as auxiliary semantic support.\n"
+            f"- raw_image direct vision is {'enabled' if settings.extraction_stage_a_use_raw_image else 'disabled'} for this stage.\n"
+            "- Output strict JSON only.\n\n"
+            "Allowed event types:\n"
+            f"{json.dumps(allowed_event_types, ensure_ascii=False)}\n\n"
+            "Compact event guidance:\n"
+            f"{benchmark_guidance}\n\n"
+            "Confusable pairs:\n"
+            f"{confusable_pairs_block}\n\n"
+            "Retrieved text event examples:\n"
+            f"{formatted_text_event_examples_topk}\n\n"
+            "Retrieved cross-modal bridge hints:\n"
+            f"{formatted_bridge_examples_topk}\n\n"
+            f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
+            f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
+            f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
+        )
+    ontology_block = format_full_ontology_for_prompt()
+    return (
+        "Stage A open-world event type selection.\n"
+        "Classify the input with one supported ontology event type while using the broad evidence-aware style.\n"
+        f"{selection_rule}\n\n"
+        "Supported ontology event types:\n"
+        f"{json.dumps(allowed_event_types, ensure_ascii=False)}\n\n"
+        "Ontology semantics:\n"
+        f"{ontology_block}\n\n"
+        "Retrieved text event examples:\n"
+        f"{formatted_text_event_examples_topk}\n\n"
+        "Retrieved cross-modal bridge hints:\n"
+        f"{formatted_bridge_examples_topk}\n\n"
+        "Rules:\n"
+        "- Choose exactly one event type.\n"
+        "- Prefer the main central event over background context.\n"
+        "- Use text, image-side evidence, and external evidence jointly when present.\n"
+        "- If evidence conflicts with retrieved examples, prefer grounded evidence and ontology over retrieval patterns.\n"
+        "- Keep the label inside the supported ontology.\n"
+        "- Output strict JSON only.\n"
+        f"- raw_image direct vision is {'enabled' if settings.extraction_stage_a_use_raw_image else 'disabled'} for this stage.\n\n"
+        f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
+        f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
+        f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
+    )
+
+
+def _build_stage_b_prompt(
+    *,
+    run_mode: str,
+    event_type: str,
+    raw_text: str,
+    image_side_info: str,
+    evidence_items: list[Any],
+    allowed_roles: list[str],
+    schema_block: str,
+    formatted_text_event_examples_topk: str,
+    formatted_bridge_examples_topk: str,
+) -> str:
+    rules = (
+        "Rules:\n"
+        "- event_type is fixed; use only allowed text roles for this event type.\n"
+        f"- allowed text roles: {json.dumps(allowed_roles, ensure_ascii=False)}\n"
+        "- Extract the shortest exact textual trigger from raw_text.\n"
+        "- trigger.text must be copied exactly from raw_text.\n"
+        "- text arguments must be copied exactly from raw_text.\n"
+        "- SHRINK TO HEAD WORD.\n"
+        "- NO DETERMINERS.\n"
+        "- NO ADJECTIVES unless essential to preserve role meaning.\n"
+        "- NO TITLES / HONORIFICS BEFORE PERSON NAMES.\n"
+        "- If a person mention contains a title, office label, or honorific before the proper name, output only the person name itself.\n"
+        "- Keep the shortest exact person-name span from raw_text.\n"
+        "- Omit uncertain arguments instead of hallucinating.\n"
+        "- span must stay null in model output; downstream alignment will recover token spans.\n"
+        "- Output strict JSON only.\n"
+    )
+    response_shape = (
+        'Return ONLY JSON: {"trigger": {"text": string, "modality": "text", "span": null} | null, '
+        '"text_arguments": [{"role": string, "text": string, "span": null}]}'
+    )
+    if _is_benchmark_mode(run_mode):
+        return (
+            "Stage B benchmark text extraction.\n"
+            "Extract only the text trigger and text arguments for the selected event type.\n\n"
+            "Selected event schema:\n"
+            f"{schema_block}\n\n"
+            "Retrieved text event examples:\n"
+            f"{formatted_text_event_examples_topk}\n\n"
+            "Optional bridge hints:\n"
+            f"{formatted_bridge_examples_topk}\n\n"
+            "Use retrieved text event examples as few-shot pattern guidance.\n"
+            "Use bridge hints only for limited role disambiguation support.\n\n"
+            f"{rules}\n"
+            f"{response_shape}\n\n"
+            f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
+            f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}}}'
+        )
+    return (
+        "Stage B open-world text extraction.\n"
+        "Extract the text trigger and text arguments for the selected event type while using evidence-aware support when available.\n\n"
+        "Selected event schema:\n"
+        f"{schema_block}\n\n"
+        "Retrieved text event examples:\n"
+        f"{formatted_text_event_examples_topk}\n\n"
+        "Optional bridge hints:\n"
+        f"{formatted_bridge_examples_topk}\n\n"
+        f"{rules}"
+        "- Use evidence snippets only as factual support, never as a source of copied trigger/argument text.\n"
+        f"{response_shape}\n\n"
+        f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
+        f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
+        f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
+    )
+
+
+def _build_stage_c_prompt(
+    *,
+    run_mode: str,
+    event_type: str,
+    raw_text: str,
+    image_side_info: str,
+    text_arguments: list[dict[str, Any]],
+    evidence_items: list[Any],
+    allowed_roles: list[str],
+    schema_block: str,
+    visibility_block: str,
+    formatted_image_semantic_examples_topk: str,
+    formatted_bridge_examples_topk: str,
+) -> str:
+    weak_place_labels = "street, road, outdoors, outside, scene, background, area, crowd"
+    shared_rules = (
+        "Rules:\n"
+        "- event_type is fixed; use only allowed image roles for this event type.\n"
+        f"- allowed image roles: {json.dumps(allowed_roles, ensure_ascii=False)}\n"
+        "- raw_image is the primary visual evidence for this stage.\n"
+        "- Treat image_side_info as auxiliary context, redundancy, and fallback support rather than the only visual input.\n"
+        "- Extract image-native semantic candidates only, not copied text arguments.\n"
+        "- Use image semantic examples as visual pattern guidance.\n"
+        "- Multiple visible instances for the same role are allowed when distinct entities are directly visible.\n"
+        "- Be very conservative for weak visual roles, especially Place.\n"
+        f"- Do not use generic background-only labels such as {weak_place_labels} unless they are clearly event-relevant and directly visible.\n"
+        "- Do not output a weakly visible role just because it is semantically allowed by the ontology.\n"
+        "- prefer omission over unsupported image-role prediction.\n"
+        "- Omit uncertain image roles instead of hallucinating.\n"
+        "- Use bridge hints to connect text roles and visual cues.\n"
+        '- bbox must be null and grounding_status must be "unresolved".\n'
+        "- Grounding happens later.\n"
+        "- Output strict JSON only.\n"
+    )
+    response_shape = 'Return ONLY JSON: {"image_arguments": [{"role": string, "label": string, "bbox": null, "grounding_status": "unresolved"}]}'
+    if _is_benchmark_mode(run_mode):
+        return (
+            "Stage C benchmark image semantic extraction.\n"
+            "Extract image-native semantic candidates from the image for the selected event type.\n\n"
+            "Selected event schema:\n"
+            f"{schema_block}\n\n"
+            "Image-role visibility guidance:\n"
+            f"{visibility_block}\n\n"
+            "Retrieved image semantic examples:\n"
+            f"{formatted_image_semantic_examples_topk}\n\n"
+            "Retrieved cross-modal bridge hints:\n"
+            f"{formatted_bridge_examples_topk}\n\n"
+            f"{shared_rules}\n"
+            f"{response_shape}\n\n"
+            f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
+            f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
+            f'"text_arguments": {json.dumps(text_arguments, ensure_ascii=False)}}}'
+        )
+    return (
+        "Stage C open-world image semantic extraction.\n"
+        "Extract image-native semantic candidates from the image while keeping broader evidence-aware context available.\n\n"
+        "Selected event schema:\n"
+        f"{schema_block}\n\n"
+        "Retrieved image semantic examples:\n"
+        f"{formatted_image_semantic_examples_topk}\n\n"
+        "Retrieved cross-modal bridge hints:\n"
+        f"{formatted_bridge_examples_topk}\n\n"
+        "Image-role visibility guidance:\n"
+        f"{visibility_block}\n\n"
+        f"{shared_rules}"
+        "- raw_text may help cross-modal disambiguation, but image roles still require direct visual support.\n"
+        "- External evidence may help disambiguate event semantics but cannot substitute for visible image support.\n"
+        f"{response_shape}\n\n"
+        f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
+        f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
+        f'"text_arguments": {json.dumps(text_arguments, ensure_ascii=False)}, '
+        f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
+    )
 
 
 def _is_generic_weak_place_label(label: str) -> bool:
@@ -343,54 +604,31 @@ def _stage_a_select_event_type(
     state: Mapping[str, Any] | None = None,
     return_trace: bool = False,
 ) -> Any:
+    run_mode = _resolve_run_mode(state)
     allowed_event_types = get_supported_event_types()
-    ontology_block = format_full_ontology_for_prompt()
     formatted_text_event_examples_topk = _format_text_event_examples_topk(patterns)
     formatted_bridge_examples_topk = _format_bridge_examples_topk(patterns)
     normalized_mode = str(event_type_mode or "closed_set").strip() or "closed_set"
     if normalized_mode not in {"closed_set", "transfer"}:
         normalized_mode = "closed_set"
-
-    if normalized_mode == "transfer":
-        selection_rule = (
-            "Stage A mode: transfer.\n"
-            "Choose exactly one supported ontology event_type, or return \"Unsupported\" if the input does not clearly fit the current ontology.\n"
-            'Return ONLY JSON: {"event_type": "<one supported label or Unsupported>"}\n\n'
-        )
-    else:
-        selection_rule = (
-            "Stage A mode: closed_set.\n"
-            "Choose exactly one supported ontology event_type from the closed set.\n"
-            'Return ONLY JSON: {"event_type": "<one of the allowed labels>"}\n\n'
-        )
-    prompt = (
-        "Stage A: event type selection.\n"
-        "Classify the input using the configured event type selection mode.\n"
-        f"{selection_rule}"
-        "Supported ontology event types:\n"
-        f"{json.dumps(allowed_event_types, ensure_ascii=False)}\n\n"
-        "Ontology semantics:\n"
-        f"{ontology_block}\n\n"
-        "Retrieved text event examples:\n"
-        f"{formatted_text_event_examples_topk}\n\n"
-        "Retrieved cross-modal bridge hints:\n"
-        f"{formatted_bridge_examples_topk}\n\n"
-        "Use raw_text, image-side information, and evidence. Prefer evidence when available.\n"
-        "- Use event definitions and trigger hints to choose the best matching event type.\n"
-        "- Use retrieved text event examples as pattern guidance only.\n"
-        "- Use cross-modal bridge hints only as auxiliary semantic support.\n"
-        "- If evidence conflicts with retrieved examples, prefer evidence and ontology over retrieved examples.\n"
-        "- Do not invent new labels or open-set variants.\n"
-        f"- raw_image direct vision is {'enabled' if settings.extraction_stage_a_use_raw_image else 'disabled'} for this stage.\n"
-        f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
-        f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
-        f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
+    prompt = _build_stage_a_prompt(
+        run_mode=run_mode,
+        raw_text=raw_text,
+        image_side_info=image_side_info,
+        evidence_items=evidence_items,
+        formatted_text_event_examples_topk=formatted_text_event_examples_topk,
+        formatted_bridge_examples_topk=formatted_bridge_examples_topk,
+        normalized_mode=normalized_mode,
     )
     parsed, trace_record = _invoke_traced_stage(
         state or {},
+        prompt_name=STAGE_A_PROMPT_NAME,
+        prompt_version=PROMPT_VERSION,
+        run_mode=run_mode,
         stage="extraction_stage_a",
         prompt=prompt,
         input_summary={
+            "run_mode": run_mode,
             "event_type_mode": normalized_mode,
             "raw_text": raw_text,
             "image_side_info": image_side_info,
@@ -418,43 +656,31 @@ def _stage_b_extract_text_fields(
     state: Mapping[str, Any] | None = None,
     return_trace: bool = False,
 ) -> Any:
+    run_mode = _resolve_run_mode(state)
     allowed_roles = get_allowed_text_roles(event_type)
     schema_block = format_event_schema_for_prompt(event_type)
     formatted_text_event_examples_topk = _format_text_event_examples_topk(patterns)
     formatted_bridge_examples_topk = _format_bridge_examples_topk(patterns)
-    prompt = (
-        "Stage B: extract text trigger and text arguments from raw_text.\n"
-        "Extract text-grounded event fields from raw_text.\n"
-        "Event ontology for the selected event_type:\n"
-        f"{schema_block}\n\n"
-        "Retrieved text event examples:\n"
-        f"{formatted_text_event_examples_topk}\n\n"
-        "Optional bridge hints:\n"
-        f"{formatted_bridge_examples_topk}\n\n"
-        "Requirements:\n"
-        "- event_type is fixed; use only the allowed text roles for this event_type.\n"
-        f"- allowed text roles for this stage: {json.dumps(allowed_roles, ensure_ascii=False)}\n"
-        "- Use retrieved text event examples as few-shot pattern guidance.\n"
-        "- Use bridge hints only for limited role disambiguation support.\n"
-        "- Use the role definitions to decide which extracted mention belongs to which role.\n"
-        "- Use the trigger_hint only as semantic guidance; trigger.text must still be copied from raw_text exactly.\n"
-        "- trigger.text must be copied directly from raw_text or trigger must be null.\n"
-        "- each text argument text must be copied directly from raw_text.\n"
-        "- Prefer the canonical head-word mention for text arguments: no determiners, no obvious quantity words, and avoid broad modifier-heavy spans when a shorter head preserves the role meaning.\n"
-        "- do not paraphrase trigger or text arguments.\n"
-        "- if evidence is insufficient, prefer omission over hallucination.\n"
-        "- span must be null in the model output; post-processing will align token spans.\n"
-        'Return ONLY JSON: {"trigger": {"text": string, "modality": "text", "span": null} | null, '
-        '"text_arguments": [{"role": string, "text": string, "span": null}]}\n\n'
-        f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
-        f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
-        f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
+    prompt = _build_stage_b_prompt(
+        run_mode=run_mode,
+        event_type=event_type,
+        raw_text=raw_text,
+        image_side_info=image_side_info,
+        evidence_items=evidence_items,
+        allowed_roles=allowed_roles,
+        schema_block=schema_block,
+        formatted_text_event_examples_topk=formatted_text_event_examples_topk,
+        formatted_bridge_examples_topk=formatted_bridge_examples_topk,
     )
     parsed, trace_record = _invoke_traced_stage(
         state or {},
+        prompt_name=STAGE_B_PROMPT_NAME,
+        prompt_version=PROMPT_VERSION,
+        run_mode=run_mode,
         stage="extraction_stage_b",
         prompt=prompt,
         input_summary={
+            "run_mode": run_mode,
             "depends_on": ["stage_a_output"],
             "stage_a_output": {"event_type": event_type},
             "raw_text": raw_text,
@@ -485,52 +711,34 @@ def _stage_c_extract_image_arguments(
     state: Mapping[str, Any] | None = None,
     return_trace: bool = False,
 ) -> Any:
+    run_mode = _resolve_run_mode(state)
     allowed_roles = get_allowed_image_roles(event_type)
     schema_block = format_event_schema_for_prompt(event_type)
     visibility_block = format_image_role_visibility_guidance_for_prompt(event_type)
     formatted_image_semantic_examples_topk = _format_image_semantic_examples_topk(patterns)
     formatted_bridge_examples_topk = _format_bridge_examples_topk(patterns)
-    prompt = (
-        "Stage C: extract image argument semantic candidates.\n"
-        "Extract image argument semantic candidates from the raw image with auxiliary image-side context.\n"
-        "Event ontology for the selected event_type:\n"
-        f"{schema_block}\n\n"
-        "Retrieved image semantic examples:\n"
-        f"{formatted_image_semantic_examples_topk}\n\n"
-        "Retrieved cross-modal bridge hints:\n"
-        f"{formatted_bridge_examples_topk}\n\n"
-        "Image-role visibility guidance:\n"
-        f"{visibility_block}\n\n"
-        "Requirements:\n"
-        "- event_type is fixed; use only the allowed image roles for this event_type.\n"
-        f"- allowed image roles for this stage: {json.dumps(allowed_roles, ensure_ascii=False)}\n"
-        "- Use image semantic examples as visual pattern guidance.\n"
-        "- Use bridge hints to connect text roles and visual cues.\n"
-        "- Use the role definitions and extraction notes to map visible evidence to semantic roles.\n"
-        "- condition on the selected event_type and the extracted text arguments.\n"
-        "- raw_image is the primary visual evidence for this stage.\n"
-        "- Treat image_side_info as auxiliary context, redundancy, and fallback support rather than the only visual input.\n"
-        "- raw_text can be used for cross-modal disambiguation, but image arguments still require direct visual support.\n"
-        "- output semantic image arguments only.\n"
-        "- Be conservative: prefer omission over unsupported image-role prediction.\n"
-        "- For visually weaker roles, require direct visual evidence rather than generic scene context.\n"
-        "- Do not output a weakly visible role just because it is semantically allowed by the ontology.\n"
-        "- For weak Place-like roles, do not use generic background-only labels such as street, road, outdoors, outside, scene, background, area, or crowd unless the place itself is a clearly depicted event-relevant target.\n"
-        "- In Justice:Arrest-Jail scenes, Agent and Person are usually visually stronger than Place; prefer omitting Place unless the location is directly and specifically depicted.\n"
-        '- bbox must be null and grounding_status must be "unresolved".\n'
-        "- do not pretend to know a precise bbox.\n"
-        "- use role + label only when supported by image-side information.\n"
-        'Return ONLY JSON: {"image_arguments": [{"role": string, "label": string, "bbox": null, "grounding_status": "unresolved"}]}\n\n'
-        f'{{"raw_text": {json.dumps(raw_text, ensure_ascii=False)}, '
-        f'"image_side_info": {json.dumps(image_side_info, ensure_ascii=False)}, '
-        f'"text_arguments": {json.dumps(text_arguments, ensure_ascii=False)}, '
-        f'"evidence": {json.dumps(evidence_items, ensure_ascii=False)}}}'
+    prompt = _build_stage_c_prompt(
+        run_mode=run_mode,
+        event_type=event_type,
+        raw_text=raw_text,
+        image_side_info=image_side_info,
+        text_arguments=text_arguments,
+        evidence_items=evidence_items,
+        allowed_roles=allowed_roles,
+        schema_block=schema_block,
+        visibility_block=visibility_block,
+        formatted_image_semantic_examples_topk=formatted_image_semantic_examples_topk,
+        formatted_bridge_examples_topk=formatted_bridge_examples_topk,
     )
     parsed, trace_record = _invoke_traced_stage(
         state or {},
+        prompt_name=STAGE_C_PROMPT_NAME,
+        prompt_version=PROMPT_VERSION,
+        run_mode=run_mode,
         stage="extraction_stage_c",
         prompt=prompt,
         input_summary={
+            "run_mode": run_mode,
             "depends_on": ["stage_a_output", "stage_b_output"],
             "stage_a_output": {"event_type": event_type},
             "stage_b_output": {"text_arguments": text_arguments},
@@ -561,6 +769,7 @@ def _run_staged_extraction(
     image_side_info = _build_image_side_info(raw_image_desc, perception_summary)
     has_usable_image_evidence = _has_usable_image_evidence(raw_image, raw_image_desc, perception_summary)
     has_valid_image_side_context = _has_valid_image_side_context(raw_image_desc, perception_summary)
+    run_mode = _resolve_run_mode(state)
     trace_records: list[dict[str, Any]] = []
     event_type, stage_a_trace = _stage_a_select_event_type(
         raw_text,
@@ -618,10 +827,14 @@ def _run_staged_extraction(
             {
                 "sample_id": "",
                 "stage": "extraction_stage_c",
+                "prompt_name": STAGE_C_PROMPT_NAME,
+                "prompt_version": PROMPT_VERSION,
+                "run_mode": run_mode,
                 "model_name": settings.extraction_model_name,
                 "prompt_text": "",
                 "image_path": safe_image_reference(raw_image),
                 "input_summary": {
+                    "run_mode": run_mode,
                     "depends_on": ["stage_a_output", "stage_b_output"],
                     "stage_a_output": stage_a_output,
                     "stage_b_output": stage_b_output,

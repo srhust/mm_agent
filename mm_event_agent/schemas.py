@@ -288,6 +288,48 @@ _QUANTITY_TOKENS = {
     "hundreds",
     "thousands",
 }
+_PERSON_TITLE_MODIFIER_TOKENS = {
+    "former",
+}
+_PERSON_TITLE_TOKENS = {
+    "president",
+    "mr",
+    "mrs",
+    "ms",
+    "dr",
+    "officer",
+    "mayor",
+    "governor",
+    "senator",
+    "sen",
+    "representative",
+    "rep",
+    "judge",
+    "justice",
+    "professor",
+    "general",
+    "coach",
+    "captain",
+}
+_PERSON_TITLE_COMPOUND_PREFIXES = {
+    ("police", "officer"),
+}
+_PERSON_NAME_PARTICLE_TOKENS = {
+    "al",
+    "bin",
+    "da",
+    "de",
+    "del",
+    "der",
+    "di",
+    "dos",
+    "du",
+    "la",
+    "le",
+    "st",
+    "van",
+    "von",
+}
 
 
 def tokenize_text(text: str) -> list[str]:
@@ -406,6 +448,54 @@ def _looks_like_proper_name(tokens: list[str]) -> bool:
     return True
 
 
+def _normalize_person_prefix_token(token: str) -> str:
+    return re.sub(r"[^a-z]+", "", str(token or "").strip().lower())
+
+
+def _looks_like_person_name(tokens: list[str]) -> bool:
+    lexical = [str(token or "").strip() for token in tokens if str(token or "").strip() and not _is_punctuation_token(str(token))]
+    if not lexical:
+        return False
+    for index, token in enumerate(lexical):
+        normalized = _normalize_person_prefix_token(token)
+        if index > 0 and normalized in _PERSON_NAME_PARTICLE_TOKENS:
+            continue
+        if not token or not token[0].isupper():
+            return False
+    return True
+
+
+def _preferred_person_name_token_slice(tokens: list[str]) -> tuple[int, int] | None:
+    if not tokens:
+        return None
+    normalized = [_normalize_person_prefix_token(token) for token in tokens]
+    best: tuple[int, int] | None = None
+    for prefix_len in range(1, len(tokens)):
+        suffix = tokens[prefix_len:]
+        if not _looks_like_person_name(suffix):
+            continue
+        prefix = normalized[:prefix_len]
+        has_title = any(token in _PERSON_TITLE_TOKENS for token in prefix)
+        if tuple(prefix) in _PERSON_TITLE_COMPOUND_PREFIXES:
+            has_title = True
+        if prefix_len >= 2 and tuple(prefix[-2:]) in _PERSON_TITLE_COMPOUND_PREFIXES:
+            has_title = True
+        if not has_title:
+            continue
+        prefix_is_allowed = True
+        for index, token in enumerate(prefix):
+            if token in _PERSON_TITLE_TOKENS or token in _PERSON_TITLE_MODIFIER_TOKENS or not token:
+                continue
+            pair_with_next = index + 1 < len(prefix) and (token, prefix[index + 1]) in _PERSON_TITLE_COMPOUND_PREFIXES
+            pair_with_prev = index > 0 and (prefix[index - 1], token) in _PERSON_TITLE_COMPOUND_PREFIXES
+            if not pair_with_next and not pair_with_prev:
+                prefix_is_allowed = False
+                break
+        if prefix_is_allowed:
+            best = (prefix_len, len(tokens))
+    return best
+
+
 def _preferred_argument_token_slice(tokens: list[str]) -> tuple[int, int]:
     if not tokens:
         return 0, 0
@@ -426,6 +516,9 @@ def _preferred_argument_token_slice(tokens: list[str]) -> tuple[int, int]:
         return 0, len(tokens)
 
     trimmed = tokens[start:end]
+    person_slice = _preferred_person_name_token_slice(trimmed)
+    if person_slice is not None:
+        return start + person_slice[0], start + person_slice[1]
     if _looks_like_proper_name(trimmed):
         return start, end
     if len(trimmed) == 1:
@@ -472,6 +565,7 @@ def describe_text_argument_normalization(
         "normalized_span": normalized_span,
         "has_determiner": False,
         "has_quantity": False,
+        "has_person_title_prefix": False,
         "is_broader_than_preferred": False,
     }
     if original_span is None:
@@ -480,6 +574,8 @@ def describe_text_argument_normalization(
     if span_tokens:
         details["has_determiner"] = span_tokens[0].lower() in _DETERMINER_TOKENS
         details["has_quantity"] = _is_quantity_token(span_tokens[0])
+        preferred_person_slice = _preferred_person_name_token_slice(span_tokens)
+        details["has_person_title_prefix"] = preferred_person_slice is not None and preferred_person_slice[0] > 0
     details["is_broader_than_preferred"] = (
         normalized_span is not None
         and (

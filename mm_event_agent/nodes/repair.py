@@ -35,6 +35,8 @@ from mm_event_agent.schemas import (
 from mm_event_agent.trace_utils import append_prompt_trace, append_repair_history, merge_stage_outputs, safe_image_reference
 
 _llm: ChatOpenAI | None = None
+PROMPT_NAME = "repair_targeted_minimal_fix"
+PROMPT_VERSION = "m2e2_repair_v2"
 
 
 def _get_llm() -> ChatOpenAI:
@@ -77,6 +79,17 @@ def _has_usable_image_evidence(raw_image: Any, raw_image_desc: str, perception_s
     if str(raw_image_desc or "").strip():
         return True
     return bool(_perception_image_signal(perception_summary))
+
+
+def _resolve_run_mode(state: Mapping[str, Any] | None) -> str:
+    value = state.get("run_mode") if isinstance(state, Mapping) else None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return settings.run_mode
+
+
+def _is_benchmark_mode(run_mode: str) -> bool:
+    return str(run_mode or "").strip() == "benchmark"
 
 
 def _sanitize_image_arguments_for_mode(
@@ -462,6 +475,78 @@ def _drop_flagged_weak_image_arguments(
     return updated
 
 
+def _build_repair_prompt(
+    *,
+    run_mode: str,
+    ontology_guidance: str,
+    evidence: str,
+    similar_block: str,
+    raw_text: str,
+    raw_image_desc: str,
+    perception_summary: str,
+    issue_block: str,
+    verifier_reason: str,
+    diagnostics_block: str,
+    grounding_results_block: str,
+    repair_plan_block: str,
+    target_field_summary: str,
+    current_event: Mapping[str, Any],
+) -> str:
+    shared_rules = (
+        "- Use the repair plan derived from verifier_diagnostics as the PRIMARY repair plan.\n"
+        "- Modify ONLY the diagnosed fields listed in the repair plan.\n"
+        "- Preserve all other fields unchanged.\n"
+        "- Do not rewrite unrelated arguments.\n"
+        "- event_type must stay inside the supported ontology.\n"
+        "- text arguments: SHRINK TO HEAD WORD, NO DETERMINERS, NO ADJECTIVES unless essential.\n"
+        "- For person mentions, remove titles, honorifics, and office labels before the exact person name when a shorter exact span exists in the original text.\n"
+        "- Remove weak unsupported image-side Place arguments.\n"
+        "- Preserve multiple valid same-role image arguments when distinct candidates are supported.\n"
+        "- Do not invent missing image roles just because text roles exist.\n"
+        "- Keep trigger.text and text_arguments[].text copied from the original text.\n"
+        '- trigger must be {"text": string, "modality": "text", "span": null} or null.\n'
+        '- text_arguments items must be {"role": string, "text": string, "span": null}.\n'
+        '- image_arguments items must be {"role": string, "label": string, "bbox": null, "grounding_status": "unresolved"} unless grounded data clearly supports a bbox.\n'
+        "- Output the COMPLETE repaired event JSON only.\n"
+    )
+    if _is_benchmark_mode(run_mode):
+        return (
+            "Benchmark repair for staged multimodal event extraction.\n"
+            "Apply minimal targeted fixes only.\n\n"
+            f"{shared_rules}\n"
+            f"Ontology:\n{ontology_guidance}\n\n"
+            f"Original text:\n{raw_text}\n\n"
+            f"Image-side context:\nraw_image_desc={raw_image_desc!r}\nperception_summary={perception_summary!r}\n\n"
+            f"Verifier issues:\n{issue_block}\n\n"
+            f"Verifier reason:\n{verifier_reason or '(none)'}\n\n"
+            f"Verifier diagnostics:\n{diagnostics_block}\n\n"
+            f"Grounding results:\n{grounding_results_block}\n\n"
+            f"Repair plan:\n{repair_plan_block}\n\n"
+            f"Target field paths:\n{target_field_summary}\n\n"
+            f"Current event (JSON object):\n{json.dumps(current_event, ensure_ascii=False)}"
+        )
+    return (
+        "Open-world repair for staged multimodal event extraction.\n"
+        "Repair the extracted event JSON with MINIMAL changes while preserving the broader evidence-aware style.\n"
+        f"{shared_rules}"
+        "- For factual fixes, use External evidence; for shape and granularity, use Similar events patterns.\n"
+        "- Use grounding_results for image repairs when they provide a matching grounded bbox.\n"
+        "- If grounding failed, do not force deletion of an otherwise acceptable unresolved image argument.\n\n"
+        f"Ontology:\n{ontology_guidance}\n\n"
+        f"External evidence:\n{evidence}\n\n"
+        f"Similar events (structural patterns):\n{similar_block}\n\n"
+        f"Original text:\n{raw_text}\n\n"
+        f"Image-side context:\nraw_image_desc={raw_image_desc!r}\nperception_summary={perception_summary!r}\n\n"
+        f"Verifier issues:\n{issue_block}\n\n"
+        f"Verifier reason:\n{verifier_reason or '(none)'}\n\n"
+        f"Verifier diagnostics:\n{diagnostics_block}\n\n"
+        f"Grounding results:\n{grounding_results_block}\n\n"
+        f"Repair plan:\n{repair_plan_block}\n\n"
+        f"Target field paths:\n{target_field_summary}\n\n"
+        f"Current event (JSON object):\n{json.dumps(current_event, ensure_ascii=False)}"
+    )
+
+
 def repair(state: Mapping[str, Any]) -> dict[str, Any]:
     """Read data + control context, write repaired event and repair_attempts only."""
     started_at = time.perf_counter()
@@ -506,52 +591,22 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
             f"Supported event types: {json.dumps(supported_event_types, ensure_ascii=False)}\n"
             "Current event_type is invalid; choose one supported event_type and use only that type's roles."
         )
-
-    prompt = (
-        "Repair the extracted event JSON with MINIMAL changes.\n"
-        "- Use the repair plan derived from verifier_diagnostics as the PRIMARY repair plan.\n"
-        "- Modify ONLY the diagnosed fields listed in the repair plan.\n"
-        "- Preserve all other fields unchanged.\n"
-        "- Do not rewrite unrelated arguments.\n"
-        "- If only one field_path is diagnosed, keep every other field exactly as-is.\n"
-        "- Fix ONLY what the verifier issues point to (wrong type, unsupported facts, bad structure).\n"
-        "- For factual fixes, use External evidence; for shape/granularity, follow Similar events patterns.\n"
-        "- Use grounding_results for image-argument repair when they provide a matching grounded bbox.\n"
-        "- If verifier reports grounding_result_not_applied, prioritize aligning that image argument to the matching grounded result.\n"
-        "- If grounding failed, do not force deletion of an otherwise acceptable unresolved image argument.\n"
-        "- Do not hallucinate image_arguments in text-only mode when there is no usable image evidence.\n"
-        "- Do not force one-to-one alignment between text_arguments and image_arguments; partial overlap is acceptable.\n"
-        "- Remove weak generic Place-like image arguments such as street, road, outdoors, outside, scene, background, area, or crowd when verifier diagnostics flag them.\n"
-        "- Preserve multiple valid image arguments for the same role when they refer to distinct image-side candidates.\n"
-        "- Do not create image grounding candidates by copying text arguments into image_arguments.\n"
-        "- Shrink text arguments to the preferred head word whenever possible.\n"
-        "- Remove determiners like a/an/the from text arguments.\n"
-        "- Remove obvious quantity words and broad modifier-heavy prefixes when a shorter head word preserves the role meaning.\n"
-        "- Preserve already valid token spans unless the repair target explicitly requires changing them.\n"
-        "- If a grounded bbox already exists, preserve it unless the diagnosed issue specifically requires changing it.\n"
-        "- event_type must stay within the supported closed ontology.\n"
-        "- text_arguments roles must be valid for the chosen event_type.\n"
-        "- image_arguments roles must be valid for the chosen event_type.\n"
-        "- Output the COMPLETE JSON object using this schema: event_type, trigger, text_arguments, image_arguments.\n"
-        '- trigger must be {"text": string, "modality": "text", "span": null} or null.\n'
-        '- text_arguments items must be {"role": string, "text": string, "span": null}.\n'
-        "- Text spans are token spans [start, end), not character offsets.\n"
-        '- image_arguments items must be {"role": string, "label": string, "bbox": null, "grounding_status": "unresolved"} unless you have grounded bbox data.\n'
-        "- Keep trigger.text and text_arguments[].text copied from the original text when possible; do not paraphrase.\n"
-        "- Use verifier diagnostics for targeted repair when available; prefer local fixes over full regeneration.\n"
-        "No markdown fences or commentary.\n\n"
-        f"Ontology:\n{ontology_guidance}\n\n"
-        f"External evidence:\n{evidence}\n\n"
-        f"Similar events (structural patterns):\n{similar_block}\n\n"
-        f"Original text:\n{raw_text}\n\n"
-        f"Image-side context:\nraw_image_desc={raw_image_desc!r}\nperception_summary={perception_summary!r}\n\n"
-        f"Verifier issues:\n{issue_block}\n\n"
-        f"Verifier reason:\n{verifier_reason or '(none)'}\n\n"
-        f"Verifier diagnostics:\n{diagnostics_block}\n\n"
-        f"Grounding results:\n{grounding_results_block}\n\n"
-        f"Repair plan:\n{repair_plan_block}\n\n"
-        f"Target field paths:\n{target_field_summary}\n\n"
-        f"Current event (JSON object):\n{json.dumps(current_event, ensure_ascii=False)}"
+    run_mode = _resolve_run_mode(state)
+    prompt = _build_repair_prompt(
+        run_mode=run_mode,
+        ontology_guidance=ontology_guidance,
+        evidence=evidence,
+        similar_block=similar_block,
+        raw_text=raw_text,
+        raw_image_desc=raw_image_desc,
+        perception_summary=perception_summary,
+        issue_block=issue_block,
+        verifier_reason=verifier_reason,
+        diagnostics_block=diagnostics_block,
+        grounding_results_block=grounding_results_block,
+        repair_plan_block=repair_plan_block,
+        target_field_summary=target_field_summary,
+        current_event=current_event,
     )
 
     attempts = int(state.get("repair_attempts") or 0) + 1
@@ -638,10 +693,14 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
                 {
                     "sample_id": "",
                     "stage": "repair",
+                    "prompt_name": PROMPT_NAME,
+                    "prompt_version": PROMPT_VERSION,
+                    "run_mode": run_mode,
                     "model_name": settings.openai_model,
                     "prompt_text": prompt,
                     "image_path": safe_image_reference(raw_image),
                     "input_summary": {
+                        "run_mode": run_mode,
                         "depends_on": ["verifier_output", "current_event"],
                         "current_event": current_event,
                         "verifier_issues": state.get("issues") if isinstance(state.get("issues"), list) else [],
@@ -710,10 +769,14 @@ def repair(state: Mapping[str, Any]) -> dict[str, Any]:
                 {
                     "sample_id": "",
                     "stage": "repair",
+                    "prompt_name": PROMPT_NAME,
+                    "prompt_version": PROMPT_VERSION,
+                    "run_mode": run_mode,
                     "model_name": settings.openai_model,
                     "prompt_text": prompt,
                     "image_path": safe_image_reference(raw_image),
                     "input_summary": {
+                        "run_mode": run_mode,
                         "depends_on": ["verifier_output", "current_event"],
                         "current_event": current_event,
                         "verifier_issues": state.get("issues") if isinstance(state.get("issues"), list) else [],

@@ -69,6 +69,8 @@ def m2e2_sample_to_agent_state(
         "tokens": words,
         "raw_image": str(image_path) if image_value else None,
         "event_type_mode": str(event_type_mode or settings.event_type_mode or "closed_set"),
+        "run_mode": settings.run_mode,
+        "effective_search_enabled": settings.effective_search_enabled,
         "image_desc": "",
         "perception_summary": "",
         "search_query": "",

@@ -14,8 +14,10 @@ import uuid
 import mm_event_agent.nodes.extraction as extraction_module
 import mm_event_agent.main as main_module
 import mm_event_agent.nodes.perception as perception_module
+import mm_event_agent.nodes.repair as repair_module
 import mm_event_agent.runtime_config as runtime_config
 import mm_event_agent.grounding.florence2_hf as grounding_module
+import mm_event_agent.nodes.verifier as verifier_module
 import scripts.eval_m2e2_agent as eval_m2e2_agent_module
 import scripts.run_m2e2_smoke as run_m2e2_smoke_module
 from types import SimpleNamespace
@@ -1377,7 +1379,135 @@ class SmokeTests(unittest.TestCase):
 
         self.assertEqual(state["text"], "A bomb exploded in a market")
         self.assertTrue(state["raw_image"])
+        self.assertEqual(state["run_mode"], "open_world")
+        self.assertTrue(state["effective_search_enabled"])
         self.assertEqual(state["image_desc"], "market area with smoke and people running")
+
+    def test_m2e2_adapter_state_includes_runtime_mode_fields(self) -> None:
+        sample = {
+            "id": "m2e2_001",
+            "text": "A bomb exploded in a market",
+            "words": ["A", "bomb", "exploded", "in", "a", "market"],
+            "image": "sample.jpg",
+        }
+
+        patched_settings = replace(runtime_config.settings, run_mode="benchmark", enable_search=False)
+        with patch("mm_event_agent.m2e2_adapter.settings", patched_settings):
+            state = m2e2_sample_to_agent_state(sample, "dummy_images")
+
+        self.assertEqual(state["run_mode"], "benchmark")
+        self.assertFalse(state["effective_search_enabled"])
+
+    def test_stage_a_benchmark_prompt_is_shorter_and_more_schema_focused_than_open_world(self) -> None:
+        benchmark_prompt = extraction_module._build_stage_a_prompt(
+            run_mode="benchmark",
+            raw_text="Police arrested a suspect outside the station",
+            image_side_info="raw_image_desc: officers restraining a person",
+            evidence_items=[],
+            formatted_text_event_examples_topk="(none)",
+            formatted_bridge_examples_topk="(none)",
+            normalized_mode="closed_set",
+        )
+        open_world_prompt = extraction_module._build_stage_a_prompt(
+            run_mode="open_world",
+            raw_text="Police arrested a suspect outside the station",
+            image_side_info="raw_image_desc: officers restraining a person",
+            evidence_items=[],
+            formatted_text_event_examples_topk="(none)",
+            formatted_bridge_examples_topk="(none)",
+            normalized_mode="closed_set",
+        )
+
+        self.assertLess(len(benchmark_prompt), len(open_world_prompt))
+        self.assertIn("Choose exactly one", benchmark_prompt)
+        self.assertIn("main central event", benchmark_prompt)
+        self.assertIn("Confusable pairs", benchmark_prompt)
+        self.assertIn("Ontology semantics:", open_world_prompt)
+
+    def test_stage_b_prompt_contains_head_word_constraints(self) -> None:
+        prompt = extraction_module._build_stage_b_prompt(
+            run_mode="benchmark",
+            event_type="Conflict:Attack",
+            raw_text="A bomb exploded in a crowded market",
+            image_side_info="raw_image_desc: smoke near the market",
+            evidence_items=[],
+            allowed_roles=["Attacker", "Target", "Instrument", "Place"],
+            schema_block="schema",
+            formatted_text_event_examples_topk="(none)",
+            formatted_bridge_examples_topk="(none)",
+        )
+
+        self.assertIn("shortest exact textual trigger", prompt)
+        self.assertIn("SHRINK TO HEAD WORD", prompt)
+        self.assertIn("NO DETERMINERS", prompt)
+        self.assertIn("NO ADJECTIVES unless essential", prompt)
+        self.assertIn("NO TITLES / HONORIFICS BEFORE PERSON NAMES", prompt)
+        self.assertIn("Keep the shortest exact person-name span from raw_text", prompt)
+        self.assertIn("Omit uncertain arguments instead of hallucinating", prompt)
+
+    def test_stage_c_prompt_contains_weak_place_suppression_and_multi_instance_guidance(self) -> None:
+        prompt = extraction_module._build_stage_c_prompt(
+            run_mode="benchmark",
+            event_type="Conflict:Attack",
+            raw_text="A bomb exploded in a market",
+            image_side_info="raw_image_desc: damaged vehicles near a market",
+            text_arguments=[{"role": "Place", "text": "market", "span": None}],
+            evidence_items=[],
+            allowed_roles=["Target", "Instrument", "Place"],
+            schema_block="schema",
+            visibility_block="visibility",
+            formatted_image_semantic_examples_topk="(none)",
+            formatted_bridge_examples_topk="(none)",
+        )
+
+        self.assertIn("image-native semantic candidates only", prompt)
+        self.assertIn("Multiple visible instances for the same role are allowed", prompt)
+        self.assertIn("Be very conservative for weak visual roles, especially Place", prompt)
+        self.assertIn("street, road, outdoors, outside, scene, background, area, crowd", prompt)
+
+    def test_verifier_benchmark_prompt_does_not_dump_full_ontology(self) -> None:
+        fusion_context = {
+            "raw_text": "A bomb exploded in a market",
+            "raw_image_desc": "smoke near a market",
+            "perception_summary": "summary",
+            "patterns": [],
+            "evidence": [],
+        }
+        event = {
+            "event_type": "Conflict:Attack",
+            "trigger": {"text": "exploded", "modality": "text", "span": {"start": 2, "end": 3}},
+            "text_arguments": [{"role": "Place", "text": "market", "span": {"start": 5, "end": 6}}],
+            "image_arguments": [],
+        }
+
+        benchmark_prompt = verifier_module._build_verifier_prompt(
+            run_mode="benchmark",
+            fusion_context=fusion_context,
+            event=event,
+            grounding_results=[],
+            raw_text=fusion_context["raw_text"],
+            raw_image_desc=fusion_context["raw_image_desc"],
+            perception_summary=fusion_context["perception_summary"],
+            evidence_items=[],
+            raw_event_type="Conflict:Attack",
+        )
+        open_world_prompt = verifier_module._build_verifier_prompt(
+            run_mode="open_world",
+            fusion_context=fusion_context,
+            event=event,
+            grounding_results=[],
+            raw_text=fusion_context["raw_text"],
+            raw_image_desc=fusion_context["raw_image_desc"],
+            perception_summary=fusion_context["perception_summary"],
+            evidence_items=[],
+            raw_event_type="Conflict:Attack",
+        )
+
+        self.assertNotIn("Ontology semantics:", benchmark_prompt)
+        self.assertNotIn("Movement:Transport", benchmark_prompt)
+        self.assertIn("Selected event schema only:", benchmark_prompt)
+        self.assertIn("Ontology semantics:", open_world_prompt)
+        self.assertIn("Movement:Transport", open_world_prompt)
 
     def test_verifier_flags_invalid_text_span(self) -> None:
         state = make_state()
@@ -1438,6 +1568,44 @@ class SmokeTests(unittest.TestCase):
 
         issue_types = {item["issue_type"] for item in result["verifier_diagnostics"]}
         self.assertIn("contains_quantity", issue_types)
+        self.assertIn("unnormalized_head_word", issue_types)
+
+    def test_verifier_flags_person_title_prefix_when_shorter_name_exists(self) -> None:
+        state = make_state()
+        state["text"] = "former President Barack Obama met leaders"
+        state["tokens"] = ["former", "President", "Barack", "Obama", "met", "leaders"]
+        state["fusion_context"] = {
+            "raw_text": state["text"],
+            "raw_image_desc": "",
+            "perception_summary": "",
+            "patterns": [],
+            "evidence": [],
+            "text_tokens": state["tokens"],
+        }
+        state["event"] = {
+            "event_type": "Contact:Meet",
+            "trigger": {"text": "met", "modality": "text", "span": {"start": 4, "end": 5}},
+            "text_arguments": [
+                {
+                    "role": "Participant",
+                    "text": "former President Barack Obama",
+                    "span": {"start": 0, "end": 4},
+                }
+            ],
+            "image_arguments": [],
+        }
+
+        with patch(
+            "mm_event_agent.nodes.verifier._get_llm",
+            return_value=FakeLLM(
+                ['{"verdict":"YES","issues":[],"confidence":0.8,"reason":"looks good"}']
+            ),
+        ):
+            result = verifier(state)
+
+        self.assertFalse(result["verified"])
+        issue_types = {item["issue_type"] for item in result["verifier_diagnostics"]}
+        self.assertIn("contains_person_title_prefix", issue_types)
         self.assertIn("unnormalized_head_word", issue_types)
 
     def test_verifier_keeps_structured_diagnostics(self) -> None:
@@ -1897,6 +2065,65 @@ class SmokeTests(unittest.TestCase):
 
         self.assertEqual(aligned["text_arguments"][0]["text"], "officers")
         self.assertEqual(aligned["text_arguments"][0]["span"], {"start": 3, "end": 4})
+
+    def test_align_text_grounded_event_strips_president_prefix_from_person_name(self) -> None:
+        aligned, _, _ = align_text_grounded_event(
+            {
+                "event_type": "Contact:Meet",
+                "trigger": None,
+                "text_arguments": [
+                    {"role": "Participant", "text": "President Barack Obama", "span": {"start": 0, "end": 3}}
+                ],
+                "image_arguments": [],
+            },
+            "President Barack Obama met reporters",
+            token_sequence=["President", "Barack", "Obama", "met", "reporters"],
+        )
+
+        self.assertEqual(aligned["text_arguments"][0]["text"], "Barack Obama")
+        self.assertEqual(aligned["text_arguments"][0]["span"], {"start": 1, "end": 3})
+
+    def test_align_text_grounded_event_strips_former_president_prefix_from_person_name(self) -> None:
+        aligned, _, _ = align_text_grounded_event(
+            {
+                "event_type": "Contact:Meet",
+                "trigger": None,
+                "text_arguments": [
+                    {
+                        "role": "Participant",
+                        "text": "former President Barack Obama",
+                        "span": {"start": 0, "end": 4},
+                    }
+                ],
+                "image_arguments": [],
+            },
+            "former President Barack Obama spoke",
+            token_sequence=["former", "President", "Barack", "Obama", "spoke"],
+        )
+
+        self.assertEqual(aligned["text_arguments"][0]["text"], "Barack Obama")
+        self.assertEqual(aligned["text_arguments"][0]["span"], {"start": 2, "end": 4})
+
+    def test_align_text_grounded_event_strips_police_officer_prefix_from_person_name(self) -> None:
+        aligned, _, _ = align_text_grounded_event(
+            {
+                "event_type": "Justice:Arrest-Jail",
+                "trigger": None,
+                "text_arguments": [
+                    {
+                        "role": "Agent",
+                        "text": "police officer Jason Van Dyke",
+                        "span": {"start": 0, "end": 5},
+                    }
+                ],
+                "image_arguments": [],
+            },
+            "police officer Jason Van Dyke testified",
+            token_sequence=["police", "officer", "Jason", "Van", "Dyke", "testified"],
+        )
+
+        self.assertEqual(aligned["text_arguments"][0]["text"], "Jason Van Dyke")
+        self.assertEqual(aligned["text_arguments"][0]["span"], {"start": 2, "end": 5})
 
     def test_align_text_grounded_event_normalizes_span_field_order(self) -> None:
         aligned, _, _ = align_text_grounded_event(
@@ -3446,6 +3673,40 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(stage_b["input_summary"]["stage_a_output"]["event_type"], "Conflict:Attack")
         self.assertEqual(stage_c["input_summary"]["depends_on"], ["stage_a_output", "stage_b_output"])
         self.assertEqual(stage_c["input_summary"]["stage_b_output"]["text_arguments"][0]["role"], "Place")
+        self.assertEqual(stage_b["prompt_name"], extraction_module.STAGE_B_PROMPT_NAME)
+        self.assertEqual(stage_b["prompt_version"], extraction_module.PROMPT_VERSION)
+        self.assertEqual(stage_b["run_mode"], "open_world")
+        self.assertEqual(stage_c["prompt_name"], extraction_module.STAGE_C_PROMPT_NAME)
+
+    def test_repair_benchmark_prompt_enforces_strict_cleanup_rules(self) -> None:
+        prompt = repair_module._build_repair_prompt(
+            run_mode="benchmark",
+            ontology_guidance="Supported event types: [\"Conflict:Attack\"]",
+            evidence="(none)",
+            similar_block="(none)",
+            raw_text="A bomb exploded in a crowded market",
+            raw_image_desc="market area with smoke",
+            perception_summary="summary",
+            issue_block="- broad text span",
+            verifier_reason="needs normalization",
+            diagnostics_block="diagnostic",
+            grounding_results_block="(none)",
+            repair_plan_block="- field_path: text_arguments[0].span; issue_type: unnormalized_head_word; suggested_action: shrink_to_head_word",
+            target_field_summary="- text_arguments[0].span",
+            current_event={
+                "event_type": "Conflict:Attack",
+                "trigger": None,
+                "text_arguments": [],
+                "image_arguments": [],
+            },
+        )
+
+        self.assertIn("SHRINK TO HEAD WORD", prompt)
+        self.assertIn("NO DETERMINERS", prompt)
+        self.assertIn("NO ADJECTIVES unless essential", prompt)
+        self.assertIn("remove titles, honorifics, and office labels", prompt)
+        self.assertIn("Remove weak unsupported image-side Place arguments", prompt)
+        self.assertIn("Do not invent missing image roles just because text roles exist", prompt)
 
     def test_trace_record_contains_stage_outputs_and_grounding_outputs(self) -> None:
         sample = {
