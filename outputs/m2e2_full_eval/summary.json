@@ -1,0 +1,15 @@
+{
+  "count": 309,
+  "verified_count": 64,
+  "error_count": 245,
+  "skipped_count": 0,
+  "run_mode": "benchmark",
+  "effective_search_enabled": false,
+  "files": {
+    "predictions": "/home/hyx/mm_agent/outputs/m2e2_full_eval/predictions.jsonl",
+    "trace": "/home/hyx/mm_agent/outputs/m2e2_full_eval/trace.jsonl",
+    "errors": "/home/hyx/mm_agent/outputs/m2e2_full_eval/errors.jsonl",
+    "summary": "/home/hyx/mm_agent/outputs/m2e2_full_eval/summary.json",
+    "per_sample_metrics": "/home/hyx/mm_agent/outputs/m2e2_full_eval/per_sample_metrics.jsonl"
+  }
+}

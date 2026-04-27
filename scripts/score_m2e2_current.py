@@ -27,6 +27,13 @@ _ROLE_EXPLICIT_ALIASES = {
     "Suspect": "Person",
 }
 
+_EVENT_ROLE_EXPLICIT_ALIASES = {
+    "Contact:Meet": {
+        "Entity": "Participant",
+        "Participant": "Participant",
+    },
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -86,6 +93,23 @@ def canonicalize_role(value: Any) -> str:
     if normalized_key in normalized_aliases:
         return normalized_aliases[normalized_key]
     return raw
+
+
+def canonicalize_role_for_event(event_type: Any, value: Any) -> str:
+    canonical_event_type = canonicalize_event_type(event_type)
+    globally_canonical_role = canonicalize_role(value)
+    if not canonical_event_type or not globally_canonical_role:
+        return globally_canonical_role
+
+    event_aliases = _EVENT_ROLE_EXPLICIT_ALIASES.get(canonical_event_type, {})
+    if globally_canonical_role in event_aliases:
+        return event_aliases[globally_canonical_role]
+
+    normalized_key = _normalize_key(globally_canonical_role)
+    normalized_aliases = {
+        _normalize_key(alias): target for alias, target in event_aliases.items()
+    }
+    return normalized_aliases.get(normalized_key, globally_canonical_role)
 
 
 def load_json_or_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -176,10 +200,24 @@ def extract_gold_text_argument_tuples(
     *,
     ignore_trigger: bool,
 ) -> list[tuple[Any, ...]]:
-    tuples: list[tuple[Any, ...]] = []
+    return [
+        record["tuple"]
+        for record in extract_gold_text_argument_records(
+            sample,
+            ignore_trigger=ignore_trigger,
+        )
+    ]
+
+
+def extract_gold_text_argument_records(
+    sample: Mapping[str, Any],
+    *,
+    ignore_trigger: bool,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
     mentions = sample.get("text_event_mentions")
     if not isinstance(mentions, list):
-        return tuples
+        return records
     for mention in mentions:
         if not isinstance(mention, Mapping):
             continue
@@ -193,16 +231,41 @@ def extract_gold_text_argument_tuples(
         for argument in arguments:
             if not isinstance(argument, Mapping):
                 continue
-            role = canonicalize_role(argument.get("role"))
+            raw_role = str(argument.get("role") or "").strip()
+            role = canonicalize_role_for_event(event_type, raw_role)
             start = argument.get("start")
             end = argument.get("end")
             if not role or not isinstance(start, int) or not isinstance(end, int):
                 continue
+            close_key = _text_close_key(
+                event_type=event_type,
+                trigger_start=trigger_start,
+                trigger_end=trigger_end,
+                start=start,
+                end=end,
+                ignore_trigger=ignore_trigger,
+            )
             if ignore_trigger:
-                tuples.append((event_type, role, start, end))
+                argument_tuple = (event_type, role, start, end)
+                raw_tuple = (event_type, raw_role, start, end)
             else:
-                tuples.append((event_type, trigger_start, trigger_end, role, start, end))
-    return tuples
+                argument_tuple = (event_type, trigger_start, trigger_end, role, start, end)
+                raw_tuple = (event_type, trigger_start, trigger_end, raw_role, start, end)
+            records.append(
+                {
+                    "tuple": argument_tuple,
+                    "raw_tuple": raw_tuple,
+                    "close_key": close_key,
+                    "event_type": event_type,
+                    "role": role,
+                    "raw_role": raw_role,
+                    "start": start,
+                    "end": end,
+                    "trigger_start": trigger_start,
+                    "trigger_end": trigger_end,
+                }
+            )
+    return records
 
 
 def extract_predicted_text_argument_tuples(
@@ -210,6 +273,20 @@ def extract_predicted_text_argument_tuples(
     *,
     ignore_trigger: bool,
 ) -> list[tuple[Any, ...]]:
+    return [
+        item["tuple"]
+        for item in extract_predicted_text_argument_records(
+            record,
+            ignore_trigger=ignore_trigger,
+        )
+    ]
+
+
+def extract_predicted_text_argument_records(
+    record: Mapping[str, Any] | None,
+    *,
+    ignore_trigger: bool,
+) -> list[dict[str, Any]]:
     if not isinstance(record, Mapping):
         return []
     prediction = record.get("prediction")
@@ -220,20 +297,45 @@ def extract_predicted_text_argument_tuples(
     arguments = prediction.get("text_arguments")
     if not isinstance(arguments, list):
         return []
-    tuples: list[tuple[Any, ...]] = []
+    records: list[dict[str, Any]] = []
     for argument in arguments:
         if not isinstance(argument, Mapping):
             continue
-        role = canonicalize_role(argument.get("role"))
+        raw_role = str(argument.get("role") or "").strip()
+        role = canonicalize_role_for_event(event_type, raw_role)
         start = argument.get("start")
         end = argument.get("end")
         if not role or not isinstance(start, int) or not isinstance(end, int):
             continue
+        close_key = _text_close_key(
+            event_type=event_type,
+            trigger_start=trigger_start,
+            trigger_end=trigger_end,
+            start=start,
+            end=end,
+            ignore_trigger=ignore_trigger,
+        )
         if ignore_trigger:
-            tuples.append((event_type, role, start, end))
+            argument_tuple = (event_type, role, start, end)
+            raw_tuple = (event_type, raw_role, start, end)
         else:
-            tuples.append((event_type, trigger_start, trigger_end, role, start, end))
-    return tuples
+            argument_tuple = (event_type, trigger_start, trigger_end, role, start, end)
+            raw_tuple = (event_type, trigger_start, trigger_end, raw_role, start, end)
+        records.append(
+            {
+                "tuple": argument_tuple,
+                "raw_tuple": raw_tuple,
+                "close_key": close_key,
+                "event_type": event_type,
+                "role": role,
+                "raw_role": raw_role,
+                "start": start,
+                "end": end,
+                "trigger_start": trigger_start,
+                "trigger_end": trigger_end,
+            }
+        )
+    return records
 
 
 def extract_gold_image_arguments(sample: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -266,7 +368,8 @@ def extract_gold_image_arguments(sample: Mapping[str, Any]) -> list[dict[str, An
             extracted.append(
                 {
                     "event_type": event_type,
-                    "role": canonicalize_role(role),
+                    "role": canonicalize_role_for_event(event_type, role),
+                    "raw_role": str(role or "").strip(),
                     "bbox": bbox,
                 }
             )
@@ -287,7 +390,8 @@ def extract_predicted_image_arguments(record: Mapping[str, Any] | None) -> list[
     for argument in arguments:
         if not isinstance(argument, Mapping):
             continue
-        role = canonicalize_role(argument.get("role"))
+        raw_role = str(argument.get("role") or "").strip()
+        role = canonicalize_role_for_event(event_type, raw_role)
         bbox = normalize_bbox(argument.get("bbox"))
         if not role or bbox is None:
             continue
@@ -295,6 +399,7 @@ def extract_predicted_image_arguments(record: Mapping[str, Any] | None) -> list[
             {
                 "event_type": event_type,
                 "role": role,
+                "raw_role": raw_role,
                 "bbox": bbox,
             }
         )
@@ -365,6 +470,170 @@ def match_image_arguments(
     return tp, matches
 
 
+def _text_close_key(
+    *,
+    event_type: str,
+    trigger_start: int | None,
+    trigger_end: int | None,
+    start: int,
+    end: int,
+    ignore_trigger: bool,
+) -> tuple[Any, ...]:
+    if ignore_trigger:
+        return (event_type, start, end)
+    return (event_type, trigger_start, trigger_end, start, end)
+
+
+def _collect_text_alias_rescues(
+    gold_records: list[dict[str, Any]],
+    pred_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rescues: list[dict[str, Any]] = []
+    unmatched_gold = set(range(len(gold_records)))
+    for pred_index, pred_item in enumerate(pred_records):
+        exact_gold_index = _find_text_match_index(
+            gold_records,
+            unmatched_gold,
+            pred_item,
+            require_raw_match=True,
+        )
+        if exact_gold_index is not None:
+            unmatched_gold.remove(exact_gold_index)
+            continue
+
+        alias_gold_index = _find_text_match_index(
+            gold_records,
+            unmatched_gold,
+            pred_item,
+            require_raw_match=False,
+        )
+        if alias_gold_index is None:
+            continue
+        gold_item = gold_records[alias_gold_index]
+        unmatched_gold.remove(alias_gold_index)
+        if gold_item["raw_role"] == pred_item["raw_role"]:
+            continue
+        rescues.append(
+            {
+                "event_type": pred_item["event_type"],
+                "gold_role": gold_item["raw_role"],
+                "pred_role": pred_item["raw_role"],
+                "canonical_role": pred_item["role"],
+                "pred_index": pred_index,
+                "gold_index": alias_gold_index,
+                "start": pred_item["start"],
+                "end": pred_item["end"],
+            }
+        )
+    return rescues
+
+
+def _find_text_match_index(
+    gold_records: list[dict[str, Any]],
+    candidate_indexes: set[int],
+    pred_item: Mapping[str, Any],
+    *,
+    require_raw_match: bool,
+) -> int | None:
+    for gold_index in sorted(candidate_indexes):
+        gold_item = gold_records[gold_index]
+        if gold_item["tuple"] != pred_item["tuple"]:
+            continue
+        if require_raw_match and gold_item["raw_tuple"] != pred_item["raw_tuple"]:
+            continue
+        return gold_index
+    return None
+
+
+def _collect_image_alias_rescues(
+    gold_image: list[dict[str, Any]],
+    pred_image: list[dict[str, Any]],
+    image_matches: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rescues: list[dict[str, Any]] = []
+    for match in image_matches:
+        if not match.get("matched"):
+            continue
+        pred_index = match.get("pred_index")
+        gold_index = match.get("matched_gold_index")
+        if not isinstance(pred_index, int) or not isinstance(gold_index, int):
+            continue
+        if pred_index < 0 or pred_index >= len(pred_image) or gold_index < 0 or gold_index >= len(gold_image):
+            continue
+        pred_item = pred_image[pred_index]
+        gold_item = gold_image[gold_index]
+        if pred_item.get("raw_role") == gold_item.get("raw_role"):
+            continue
+        rescues.append(
+            {
+                "event_type": pred_item["event_type"],
+                "gold_role": gold_item.get("raw_role", ""),
+                "pred_role": pred_item.get("raw_role", ""),
+                "canonical_role": pred_item["role"],
+                "pred_index": pred_index,
+                "gold_index": gold_index,
+                "iou": match.get("iou", 0.0),
+            }
+        )
+    return rescues
+
+
+def _accumulate_text_role_confusions(
+    container: Counter[tuple[str, str, str]],
+    gold_records: list[dict[str, Any]],
+    pred_records: list[dict[str, Any]],
+    *,
+    normalized: bool,
+) -> None:
+    for gold_item in gold_records:
+        for pred_item in pred_records:
+            if gold_item["close_key"] != pred_item["close_key"]:
+                continue
+            gold_role = str(gold_item["role"] if normalized else gold_item["raw_role"])
+            pred_role = str(pred_item["role"] if normalized else pred_item["raw_role"])
+            if not gold_role or not pred_role or gold_role == pred_role:
+                continue
+            container[(str(gold_item["event_type"]), gold_role, pred_role)] += 1
+
+
+def _accumulate_image_role_confusions(
+    container: Counter[tuple[str, str, str]],
+    gold_image: list[dict[str, Any]],
+    pred_image: list[dict[str, Any]],
+    *,
+    image_iou: float,
+    normalized: bool,
+) -> None:
+    for gold_item in gold_image:
+        for pred_item in pred_image:
+            if gold_item["event_type"] != pred_item["event_type"]:
+                continue
+            if bbox_iou(gold_item["bbox"], pred_item["bbox"]) <= image_iou:
+                continue
+            gold_role = str(gold_item["role"] if normalized else gold_item.get("raw_role", ""))
+            pred_role = str(pred_item["role"] if normalized else pred_item.get("raw_role", ""))
+            if not gold_role or not pred_role or gold_role == pred_role:
+                continue
+            container[(str(gold_item["event_type"]), gold_role, pred_role)] += 1
+
+
+def _materialize_confusion_counts(
+    counts: Counter[tuple[str, str, str]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "event_type": event_type,
+            "gold_role": gold_role,
+            "pred_role": pred_role,
+            "count": count,
+        }
+        for (event_type, gold_role, pred_role), count in sorted(
+            counts.items(),
+            key=lambda item: (item[0][0], item[0][1], item[0][2]),
+        )
+    ]
+
+
 def score_predictions(
     gold_samples: list[dict[str, Any]],
     prediction_records: list[dict[str, Any]],
@@ -399,6 +668,10 @@ def score_predictions(
     event_type_stats_xmtl: dict[str, dict[str, int]] = {}
     role_stats: dict[str, dict[str, dict[str, int]]] = {}
     role_stats_xmtl: dict[str, dict[str, dict[str, int]]] = {}
+    role_alias_rescued_matches = 0
+    role_alias_rescued_matches_by_event_type: Counter[str] = Counter()
+    raw_role_confusion_counts: Counter[tuple[str, str, str]] = Counter()
+    normalized_role_confusion_counts: Counter[tuple[str, str, str]] = Counter()
 
     for sample in gold_samples:
         sample_id = str(sample.get("id") or "").strip()
@@ -412,8 +685,13 @@ def score_predictions(
         if gold_event_type and predicted_event_type == gold_event_type:
             event_tp += 1
 
-        gold_text = extract_gold_text_argument_tuples(sample, ignore_trigger=ignore_trigger)
-        pred_text = extract_predicted_text_argument_tuples(prediction_record, ignore_trigger=ignore_trigger)
+        gold_text_records = extract_gold_text_argument_records(sample, ignore_trigger=ignore_trigger)
+        pred_text_records = extract_predicted_text_argument_records(
+            prediction_record,
+            ignore_trigger=ignore_trigger,
+        )
+        gold_text = [item["tuple"] for item in gold_text_records]
+        pred_text = [item["tuple"] for item in pred_text_records]
         gold_text_counter = Counter(gold_text)
         pred_text_counter = Counter(pred_text)
         text_sample_tp = sum((gold_text_counter & pred_text_counter).values())
@@ -431,6 +709,47 @@ def score_predictions(
         image_tp += image_sample_tp
         image_gold_total += len(gold_image)
         image_pred_total += len(pred_image)
+
+        alias_rescued_text_arguments = _collect_text_alias_rescues(
+            gold_text_records,
+            pred_text_records,
+        )
+        alias_rescued_image_arguments = _collect_image_alias_rescues(
+            gold_image,
+            pred_image,
+            image_match_details,
+        )
+        sample_alias_rescue_count = len(alias_rescued_text_arguments) + len(alias_rescued_image_arguments)
+        role_alias_rescued_matches += sample_alias_rescue_count
+        for rescue in alias_rescued_text_arguments + alias_rescued_image_arguments:
+            role_alias_rescued_matches_by_event_type[str(rescue["event_type"])] += 1
+
+        _accumulate_text_role_confusions(
+            raw_role_confusion_counts,
+            gold_text_records,
+            pred_text_records,
+            normalized=False,
+        )
+        _accumulate_text_role_confusions(
+            normalized_role_confusion_counts,
+            gold_text_records,
+            pred_text_records,
+            normalized=True,
+        )
+        _accumulate_image_role_confusions(
+            raw_role_confusion_counts,
+            gold_image,
+            pred_image,
+            image_iou=image_iou,
+            normalized=False,
+        )
+        _accumulate_image_role_confusions(
+            normalized_role_confusion_counts,
+            gold_image,
+            pred_image,
+            image_iou=image_iou,
+            normalized=True,
+        )
 
         event_stats = event_type_stats.setdefault(gold_event_type or "(missing)", {"tp": 0, "pred": 0, "gold": 0})
         event_stats["tp"] += text_sample_tp + image_sample_tp
@@ -490,6 +809,8 @@ def score_predictions(
                 "predicted_image_arguments": pred_image,
                 "matched_text_arguments": text_sample_tp,
                 "matched_image_arguments": image_sample_tp,
+                "alias_rescued_text_arguments": alias_rescued_text_arguments,
+                "alias_rescued_image_arguments": alias_rescued_image_arguments,
             }
         )
 
@@ -528,6 +849,10 @@ def score_predictions(
         "event_type_statistics_xmtl_style": _materialize_metric_map(event_type_stats_xmtl),
         "role_statistics_by_event_type": _materialize_nested_metric_map(role_stats),
         "role_statistics_by_event_type_xmtl_style": _materialize_nested_metric_map(role_stats_xmtl),
+        "role_alias_rescued_matches": role_alias_rescued_matches,
+        "role_alias_rescued_matches_by_event_type": dict(sorted(role_alias_rescued_matches_by_event_type.items())),
+        "raw_role_confusion_counts": _materialize_confusion_counts(raw_role_confusion_counts),
+        "normalized_role_confusion_counts": _materialize_confusion_counts(normalized_role_confusion_counts),
         "comparison_samples_preview": comparisons[: max(0, int(comparison_preview))],
     }
     return report
@@ -537,13 +862,15 @@ def _normalize_gold_image_argument(argument: Any) -> dict[str, Any] | None:
     if not isinstance(argument, Mapping):
         return None
     event_type = canonicalize_event_type(argument.get("event_type"))
-    role = canonicalize_role(argument.get("role"))
+    raw_role = str(argument.get("role") or "").strip()
+    role = canonicalize_role_for_event(event_type, raw_role)
     bbox = normalize_bbox(argument.get("bbox"))
     if not event_type or not role or bbox is None:
         return None
     return {
         "event_type": event_type,
         "role": role,
+        "raw_role": raw_role,
         "bbox": bbox,
     }
 

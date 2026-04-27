@@ -1,0 +1,3895 @@
+{
+  "summary": {
+    "overall": {
+      "num_gold_samples": 309,
+      "num_prediction_records": 309,
+      "num_records": 309,
+      "text_error_total": 703,
+      "image_error_total": 1353
+    },
+    "text": {
+      "text.true_positive": 153,
+      "text.event_type_mismatch_samples": 22,
+      "text.fp_due_to_wrong_event_type": 31,
+      "text.fp_wrong_role_same_span": 12,
+      "text.fp_boundary_error_same_role": 11,
+      "text.fp_wrong_role_and_boundary": 0,
+      "text.fp_role_outside_schema": 0,
+      "text.fp_spurious_argument": 337,
+      "text.fn_due_to_missing_event_type": 27,
+      "text.fn_wrong_role_same_span": 11,
+      "text.fn_boundary_error_same_role": 11,
+      "text.fn_wrong_role_and_boundary": 0,
+      "text.fn_missing_argument": 263,
+      "text.pred_role_illegal_under_pred_event": 0,
+      "text.pred_role_outside_gold_schema_union": 19
+    },
+    "image": {
+      "image.true_positive": 254,
+      "image.event_type_mismatch_samples": 22,
+      "image.fp_due_to_wrong_event_type": 67,
+      "image.fp_wrong_role_correct_box": 33,
+      "image.fp_box_not_precise_enough_oversized": 44,
+      "image.fp_box_not_precise_enough_undersized": 12,
+      "image.fp_box_not_precise_enough_shifted": 21,
+      "image.fp_weak_overlap_same_role": 91,
+      "image.fp_no_overlap_same_role": 47,
+      "image.fp_spurious_argument": 297,
+      "image.fn_due_to_missing_event_type": 52,
+      "image.fn_wrong_role_correct_box": 27,
+      "image.fn_box_not_precise_enough_oversized": 44,
+      "image.fn_box_not_precise_enough_undersized": 9,
+      "image.fn_box_not_precise_enough_shifted": 21,
+      "image.fn_weak_overlap_same_role": 177,
+      "image.fn_no_overlap_same_role": 123,
+      "image.fn_missing_argument": 288
+    }
+  },
+  "example_samples": {
+    "image.fn_box_not_precise_enough_oversized": [
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184933_8::VOA_EN_NW_2016.02.10.3184933_2.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            30.0,
+            905.0,
+            1153.0,
+            3366.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            28.512001037597656,
+            820.800048828125,
+            4854.81591796875,
+            3450.816162109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184933_8::VOA_EN_NW_2016.02.10.3184933_2.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.05.15.3851683_26::VOA_EN_NW_2017.05.15.3851683_2.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Vehicle",
+          "raw_role": "Vehicle",
+          "bbox": [
+            13.0,
+            1871.0,
+            5614.0,
+            2805.0
+          ]
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Vehicle",
+          "raw_role": "Vehicle",
+          "bbox": [
+            2.806999921798706,
+            866.5045166015625,
+            5605.57861328125,
+            2824.093505859375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.05.15.3851683_26::VOA_EN_NW_2017.05.15.3851683_2.jpg::Movement:Transport"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.05.15.3851683_2::VOA_EN_NW_2017.05.15.3851683_2.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Vehicle",
+          "raw_role": "Vehicle",
+          "bbox": [
+            13.0,
+            1871.0,
+            5614.0,
+            2805.0
+          ]
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Vehicle",
+          "raw_role": "Vehicle",
+          "bbox": [
+            2.806999921798706,
+            866.5045166015625,
+            5605.57861328125,
+            2827.83642578125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.05.15.3851683_2::VOA_EN_NW_2017.05.15.3851683_2.jpg::Movement:Transport"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.06.26.3392569_9::VOA_EN_NW_2016.06.26.3392569_1.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            1978.0,
+            399.0,
+            3311.0,
+            2999.0
+          ]
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            2021.904052734375,
+            337.44000244140625,
+            4905.64794921875,
+            3438.239990234375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 5,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.06.26.3392569_9::VOA_EN_NW_2016.06.26.3392569_1.jpg::Movement:Transport"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.12.14.3635600_33::VOA_EN_NW_2016.12.14.3635600_5.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "bbox": [
+            835.0,
+            267.0,
+            1356.0,
+            1031.0
+          ]
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "bbox": [
+            777.0,
+            348.5085144042969,
+            1467.0,
+            1340.985595703125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.12.14.3635600_33::VOA_EN_NW_2016.12.14.3635600_5.jpg::Movement:Transport"
+        }
+      }
+    ],
+    "image.fn_box_not_precise_enough_shifted": [
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184933_8::VOA_EN_NW_2016.02.10.3184933_2.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            3745.0,
+            851.0,
+            5184.0,
+            3434.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            28.512001037597656,
+            820.800048828125,
+            4854.81591796875,
+            3450.816162109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184933_8::VOA_EN_NW_2016.02.10.3184933_2.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.01.30.3699085_18::VOA_EN_NW_2017.01.30.3699085_3.jpg::Contact:Phone-Write",
+        "gold_event_type": "Contact:Phone-Write",
+        "predicted_event_type": "Contact:Phone-Write",
+        "gold": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            807.0,
+            316.0,
+            3491.0,
+            2232.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1.75,
+            1.1664999723434448,
+            2507.75,
+            2329.50048828125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 1,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.01.30.3699085_18::VOA_EN_NW_2017.01.30.3699085_3.jpg::Contact:Phone-Write"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.07.28.3437601_8::VOA_EN_NW_2016.07.28.3437601_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Person",
+          "raw_role": "Person",
+          "bbox": [
+            1291.0,
+            429.0,
+            2031.0,
+            2158.0
+          ]
+        },
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Person",
+          "raw_role": "Person",
+          "bbox": [
+            754.25,
+            467.7225341796875,
+            1580.25,
+            2261.6025390625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.28.3437601_8::VOA_EN_NW_2016.07.28.3437601_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_0::VOA_EN_NW_2017.06.21.3910361_2.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1230.0,
+            12.0,
+            2057.0,
+            1051.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1.2304999828338623,
+            430.0,
+            2457.308349609375,
+            1179.9200439453125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_0::VOA_EN_NW_2017.06.21.3910361_2.jpg::Conflict:Attack"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_1::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            537.0,
+            65.0,
+            1190.0,
+            949.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1.0,
+            331.00201416015625,
+            1997.0,
+            905.093994140625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_1::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack"
+        }
+      }
+    ],
+    "image.fn_box_not_precise_enough_undersized": [
+      {
+        "sample_id": "VOA_EN_NW_2016.11.10.3590360_22::VOA_EN_NW_2016.11.10.3590360_5.jpg::Conflict:Demonstrate",
+        "gold_event_type": "Conflict:Demonstrate",
+        "predicted_event_type": "Conflict:Demonstrate",
+        "gold": {
+          "event_type": "Conflict:Demonstrate",
+          "role": "Entity",
+          "raw_role": "Entity",
+          "bbox": [
+            1625.0,
+            897.0,
+            4715.0,
+            3113.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Demonstrate",
+          "role": "Entity",
+          "raw_role": "Entity",
+          "bbox": [
+            2930.37255859375,
+            751.7894897460938,
+            4274.1474609375,
+            3108.330322265625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.11.10.3590360_22::VOA_EN_NW_2016.11.10.3590360_5.jpg::Conflict:Demonstrate"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_0::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            537.0,
+            65.0,
+            1190.0,
+            949.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            709.0,
+            209.79000854492188,
+            1069.0,
+            906.426025390625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_0::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_5::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            537.0,
+            65.0,
+            1190.0,
+            949.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            709.0,
+            209.79000854492188,
+            1069.0,
+            906.426025390625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_5::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_18::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            537.0,
+            65.0,
+            1190.0,
+            949.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            709.0,
+            209.79000854492188,
+            1069.0,
+            906.426025390625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_18::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.02.22.3734870_3::VOA_EN_NW_2017.02.22.3734870_1.jpg::Conflict:Demonstrate",
+        "gold_event_type": "Conflict:Demonstrate",
+        "predicted_event_type": "Conflict:Demonstrate",
+        "gold": {
+          "event_type": "Conflict:Demonstrate",
+          "role": "Police",
+          "raw_role": "Police",
+          "bbox": [
+            37.0,
+            1076.0,
+            4321.0,
+            2778.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Demonstrate",
+          "role": "Police",
+          "raw_role": "Police",
+          "bbox": [
+            461.4570007324219,
+            968.133056640625,
+            1900.5030517578125,
+            2773.8330078125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.02.22.3734870_3::VOA_EN_NW_2017.02.22.3734870_1.jpg::Conflict:Demonstrate"
+        }
+      }
+    ],
+    "image.fn_due_to_missing_event_type": [
+      {
+        "sample_id": "VOA_EN_NW_2016.12.14.3635692_11::VOA_EN_NW_2016.12.14.3635692_3.jpg::Contact:Phone-Write",
+        "gold_event_type": "Contact:Phone-Write",
+        "predicted_event_type": "",
+        "gold": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Entity",
+          "raw_role": "Entity",
+          "bbox": [
+            360.0,
+            236.0,
+            1789.0,
+            1046.0
+          ]
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 0,
+          "has_stage_c_candidate": false,
+          "grounding_attempted": false,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.12.14.3635692_11::VOA_EN_NW_2016.12.14.3635692_3.jpg::Contact:Phone-Write"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.12.14.3635692_11::VOA_EN_NW_2016.12.14.3635692_3.jpg::Contact:Phone-Write",
+        "gold_event_type": "Contact:Phone-Write",
+        "predicted_event_type": "",
+        "gold": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            335.0,
+            907.0,
+            952.0,
+            1071.0
+          ]
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 0,
+          "has_stage_c_candidate": false,
+          "grounding_attempted": false,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.12.14.3635692_11::VOA_EN_NW_2016.12.14.3635692_3.jpg::Contact:Phone-Write"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.12.14.3635692_14::VOA_EN_NW_2016.12.14.3635692_4.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            498.0,
+            298.0,
+            1703.0,
+            2651.0
+          ]
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 0,
+          "has_stage_c_candidate": false,
+          "grounding_attempted": false,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.12.14.3635692_14::VOA_EN_NW_2016.12.14.3635692_4.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.12.14.3635692_14::VOA_EN_NW_2016.12.14.3635692_4.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            1412.0,
+            387.0,
+            3437.0,
+            2651.0
+          ]
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 0,
+          "has_stage_c_candidate": false,
+          "grounding_attempted": false,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.12.14.3635692_14::VOA_EN_NW_2016.12.14.3635692_4.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.10.31.3572766_9::VOA_EN_NW_2016.10.31.3572766_2.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            2048.0,
+            1077.0,
+            3335.0,
+            2981.0
+          ]
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 0,
+          "has_stage_c_candidate": false,
+          "grounding_attempted": false,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.10.31.3572766_9::VOA_EN_NW_2016.10.31.3572766_2.jpg::Contact:Meet"
+        }
+      }
+    ],
+    "image.fn_missing_argument": [
+      {
+        "sample_id": "VOA_EN_NW_2016.07.14.3417836_18::VOA_EN_NW_2016.07.14.3417836_2.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            1408.0,
+            390.0,
+            2162.0,
+            1624.0
+          ]
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.14.3417836_18::VOA_EN_NW_2016.07.14.3417836_2.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            195.0,
+            735.0,
+            1435.0,
+            2345.0
+          ]
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            1295.0,
+            655.0,
+            2478.0,
+            2426.0
+          ]
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.01.22.3686805_34::VOA_EN_NW_2017.01.22.3686805_4.jpg::Conflict:Demonstrate",
+        "gold_event_type": "Conflict:Demonstrate",
+        "predicted_event_type": "Conflict:Demonstrate",
+        "gold": {
+          "event_type": "Conflict:Demonstrate",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            82.0,
+            913.0,
+            773.0,
+            1656.0
+          ]
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.01.22.3686805_34::VOA_EN_NW_2017.01.22.3686805_4.jpg::Conflict:Demonstrate"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.02.15.3726266_59::VOA_EN_NW_2017.02.15.3726266_3.jpg::Conflict:Demonstrate",
+        "gold_event_type": "Conflict:Demonstrate",
+        "predicted_event_type": "Conflict:Demonstrate",
+        "gold": {
+          "event_type": "Conflict:Demonstrate",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1172.0,
+            1194.0,
+            1861.0,
+            1822.0
+          ]
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.02.15.3726266_59::VOA_EN_NW_2017.02.15.3726266_3.jpg::Conflict:Demonstrate"
+        }
+      }
+    ],
+    "image.fn_no_overlap_same_role": [
+      {
+        "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_0.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            1945.0,
+            177.0,
+            3301.0,
+            2569.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            121.80900573730469,
+            92.51300048828125,
+            1656.175048828125,
+            2602.091064453125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_0.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2015.10.21.3017239_45::VOA_EN_NW_2015.10.21.3017239_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            848.0,
+            610.0,
+            1551.0,
+            2669.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            1580.761474609375,
+            794.6184692382812,
+            2285.993408203125,
+            2793.247314453125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.10.21.3017239_45::VOA_EN_NW_2015.10.21.3017239_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2015.10.21.3017239_65::VOA_EN_NW_2015.10.21.3017239_5.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            343.0,
+            70.0,
+            546.0,
+            406.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            76.5,
+            16.4429988861084,
+            327.9000244140625,
+            405.3909912109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.10.21.3017239_65::VOA_EN_NW_2015.10.21.3017239_5.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.05.15.3851683_2::VOA_EN_NW_2017.05.15.3851683_3.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "bbox": [
+            701.0,
+            574.0,
+            2393.0,
+            1050.0
+          ]
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "bbox": [
+            623.3759765625,
+            1165.5360107421875,
+            833.3280029296875,
+            1547.424072265625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 5,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.05.15.3851683_2::VOA_EN_NW_2017.05.15.3851683_3.jpg::Movement:Transport"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.06.26.3392569_27::VOA_EN_NW_2016.06.26.3392569_3.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            2643.0,
+            766.0,
+            3149.0,
+            1238.0
+          ]
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            3244.326416015625,
+            2945.41650390625,
+            3587.0576171875,
+            3115.828369140625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.06.26.3392569_27::VOA_EN_NW_2016.06.26.3392569_3.jpg::Movement:Transport"
+        }
+      }
+    ],
+    "image.fn_weak_overlap_same_role": [
+      {
+        "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            250.0,
+            191.0,
+            846.0,
+            1630.0
+          ]
+        },
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            669.2900390625,
+            222.4949951171875,
+            1358.6060791015625,
+            1627.5550537109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            1212.0,
+            240.0,
+            1782.0,
+            1630.0
+          ]
+        },
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            669.2900390625,
+            222.4949951171875,
+            1358.6060791015625,
+            1627.5550537109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_1.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            1.0,
+            996.0,
+            382.0,
+            1722.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            2.3564999103546143,
+            1000.7730102539062,
+            4705.93017578125,
+            2350.947021484375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_1.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_1.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            438.0,
+            1048.0,
+            717.0,
+            1674.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            2.3564999103546143,
+            1000.7730102539062,
+            4705.93017578125,
+            2350.947021484375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_1.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_1.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            669.0,
+            1048.0,
+            1025.0,
+            1804.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            2.3564999103546143,
+            1000.7730102539062,
+            4705.93017578125,
+            2350.947021484375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_1.jpg::Contact:Meet"
+        }
+      }
+    ],
+    "image.fn_wrong_role_correct_box": [
+      {
+        "sample_id": "VOA_EN_NW_2016.12.28.3654650_8::VOA_EN_NW_2016.12.28.3654650_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            371.0,
+            542.0,
+            2300.0,
+            4134.0
+          ]
+        },
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            374.1875,
+            518.8169555664062,
+            2296.014404296875,
+            4127.798828125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.12.28.3654650_8::VOA_EN_NW_2016.12.28.3654650_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.01.30.3699085_18::VOA_EN_NW_2017.01.30.3699085_3.jpg::Contact:Phone-Write",
+        "gold_event_type": "Contact:Phone-Write",
+        "predicted_event_type": "Contact:Phone-Write",
+        "gold": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Entity",
+          "raw_role": "Entity",
+          "bbox": [
+            11.0,
+            3.0,
+            2499.0,
+            2333.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1.75,
+            1.1664999723434448,
+            2507.75,
+            2329.50048828125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 1,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.01.30.3699085_18::VOA_EN_NW_2017.01.30.3699085_3.jpg::Contact:Phone-Write"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.01.30.3699085_18::VOA_EN_NW_2017.01.30.3699085_0.jpg::Contact:Phone-Write",
+        "gold_event_type": "Contact:Phone-Write",
+        "predicted_event_type": "Contact:Phone-Write",
+        "gold": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Entity",
+          "raw_role": "Entity",
+          "bbox": [
+            1.0,
+            906.0,
+            1063.0,
+            2152.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            2.565500020980835,
+            911.6964721679688,
+            1049.28955078125,
+            2276.675537109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 1,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.01.30.3699085_18::VOA_EN_NW_2017.01.30.3699085_0.jpg::Contact:Phone-Write"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.07.10.3936006_10::VOA_EN_NW_2017.07.10.3936006_2.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Target",
+          "raw_role": "Target",
+          "bbox": [
+            1.0,
+            599.0,
+            2482.0,
+            1667.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1.25,
+            694.3055419921875,
+            2496.25,
+            1664.49951171875
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.07.10.3936006_10::VOA_EN_NW_2017.07.10.3936006_2.jpg::Conflict:Attack"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.07.12.3415627_41::VOA_EN_NW_2016.07.12.3415627_2.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            257.0,
+            307.0,
+            621.0,
+            1214.0
+          ]
+        },
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Person",
+          "raw_role": "Person",
+          "bbox": [
+            241.90200805664062,
+            304.7124938964844,
+            607.926025390625,
+            1216.925537109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.12.3415627_41::VOA_EN_NW_2016.07.12.3415627_2.jpg::Justice:Arrest-Jail"
+        }
+      }
+    ],
+    "image.fp_box_not_precise_enough_oversized": [
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184933_8::VOA_EN_NW_2016.02.10.3184933_2.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            30.0,
+            905.0,
+            1153.0,
+            3366.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            28.512001037597656,
+            820.800048828125,
+            4854.81591796875,
+            3450.816162109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184933_8::VOA_EN_NW_2016.02.10.3184933_2.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184933_8::VOA_EN_NW_2016.02.10.3184933_2.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            30.0,
+            905.0,
+            1153.0,
+            3366.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            28.512001037597656,
+            820.800048828125,
+            4854.81591796875,
+            3450.816162109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184933_8::VOA_EN_NW_2016.02.10.3184933_2.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184933_8::VOA_EN_NW_2016.02.10.3184933_2.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            30.0,
+            905.0,
+            1153.0,
+            3366.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            28.512001037597656,
+            810.4320068359375,
+            4849.6318359375,
+            3450.816162109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184933_8::VOA_EN_NW_2016.02.10.3184933_2.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.05.15.3851683_26::VOA_EN_NW_2017.05.15.3851683_2.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Vehicle",
+          "raw_role": "Vehicle",
+          "bbox": [
+            13.0,
+            1871.0,
+            5614.0,
+            2805.0
+          ]
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Vehicle",
+          "raw_role": "Vehicle",
+          "bbox": [
+            2.806999921798706,
+            866.5045166015625,
+            5605.57861328125,
+            2824.093505859375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.05.15.3851683_26::VOA_EN_NW_2017.05.15.3851683_2.jpg::Movement:Transport"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.05.15.3851683_2::VOA_EN_NW_2017.05.15.3851683_2.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Vehicle",
+          "raw_role": "Vehicle",
+          "bbox": [
+            13.0,
+            1871.0,
+            5614.0,
+            2805.0
+          ]
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Vehicle",
+          "raw_role": "Vehicle",
+          "bbox": [
+            2.806999921798706,
+            866.5045166015625,
+            5605.57861328125,
+            2827.83642578125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.05.15.3851683_2::VOA_EN_NW_2017.05.15.3851683_2.jpg::Movement:Transport"
+        }
+      }
+    ],
+    "image.fp_box_not_precise_enough_shifted": [
+      {
+        "sample_id": "VOA_EN_NW_2016.07.28.3437601_8::VOA_EN_NW_2016.07.28.3437601_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Person",
+          "raw_role": "Person",
+          "bbox": [
+            1291.0,
+            429.0,
+            2031.0,
+            2158.0
+          ]
+        },
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Person",
+          "raw_role": "Person",
+          "bbox": [
+            754.25,
+            467.7225341796875,
+            1580.25,
+            2261.6025390625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.28.3437601_8::VOA_EN_NW_2016.07.28.3437601_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_0::VOA_EN_NW_2017.06.21.3910361_2.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1230.0,
+            12.0,
+            2057.0,
+            1051.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1.2304999828338623,
+            430.0,
+            2457.308349609375,
+            1179.9200439453125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_0::VOA_EN_NW_2017.06.21.3910361_2.jpg::Conflict:Attack"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_1::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            537.0,
+            65.0,
+            1190.0,
+            949.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1.0,
+            331.00201416015625,
+            1997.0,
+            905.093994140625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_1::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_1::VOA_EN_NW_2017.06.21.3910361_2.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1230.0,
+            12.0,
+            2057.0,
+            1051.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1.2304999828338623,
+            430.0,
+            2457.308349609375,
+            1179.9200439453125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_1::VOA_EN_NW_2017.06.21.3910361_2.jpg::Conflict:Attack"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_5::VOA_EN_NW_2017.06.21.3910361_2.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1230.0,
+            12.0,
+            2057.0,
+            1051.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1.2304999828338623,
+            430.0,
+            2457.308349609375,
+            1179.9200439453125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_5::VOA_EN_NW_2017.06.21.3910361_2.jpg::Conflict:Attack"
+        }
+      }
+    ],
+    "image.fp_box_not_precise_enough_undersized": [
+      {
+        "sample_id": "VOA_EN_NW_2016.11.10.3590360_22::VOA_EN_NW_2016.11.10.3590360_5.jpg::Conflict:Demonstrate",
+        "gold_event_type": "Conflict:Demonstrate",
+        "predicted_event_type": "Conflict:Demonstrate",
+        "gold": {
+          "event_type": "Conflict:Demonstrate",
+          "role": "Entity",
+          "raw_role": "Entity",
+          "bbox": [
+            1625.0,
+            897.0,
+            4715.0,
+            3113.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Demonstrate",
+          "role": "Entity",
+          "raw_role": "Entity",
+          "bbox": [
+            2930.37255859375,
+            751.7894897460938,
+            4274.1474609375,
+            3108.330322265625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.11.10.3590360_22::VOA_EN_NW_2016.11.10.3590360_5.jpg::Conflict:Demonstrate"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_0::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            537.0,
+            65.0,
+            1190.0,
+            949.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            709.0,
+            209.79000854492188,
+            1069.0,
+            906.426025390625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_0::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_5::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            537.0,
+            65.0,
+            1190.0,
+            949.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            709.0,
+            209.79000854492188,
+            1069.0,
+            906.426025390625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_5::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_18::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            537.0,
+            65.0,
+            1190.0,
+            949.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            709.0,
+            209.79000854492188,
+            1069.0,
+            906.426025390625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_18::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.02.22.3734870_3::VOA_EN_NW_2017.02.22.3734870_1.jpg::Conflict:Demonstrate",
+        "gold_event_type": "Conflict:Demonstrate",
+        "predicted_event_type": "Conflict:Demonstrate",
+        "gold": {
+          "event_type": "Conflict:Demonstrate",
+          "role": "Police",
+          "raw_role": "Police",
+          "bbox": [
+            37.0,
+            1076.0,
+            4321.0,
+            2778.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Demonstrate",
+          "role": "Police",
+          "raw_role": "Police",
+          "bbox": [
+            461.4570007324219,
+            968.133056640625,
+            1900.5030517578125,
+            2773.8330078125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.02.22.3734870_3::VOA_EN_NW_2017.02.22.3734870_1.jpg::Conflict:Demonstrate"
+        }
+      }
+    ],
+    "image.fp_due_to_wrong_event_type": [
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            1265.25,
+            658.6590576171875,
+            2518.25,
+            2422.361083984375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Vehicle",
+          "raw_role": "Vehicle",
+          "bbox": [
+            334.25,
+            1.2130000591278076,
+            2371.25,
+            1359.7730712890625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Vehicle",
+          "raw_role": "Vehicle",
+          "bbox": [
+            1.75,
+            1.2130000591278076,
+            3494.75,
+            2422.361083984375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2013.01.21.1587732_10::VOA_EN_NW_2013.01.21.1587732_2.jpg::Life:Die",
+        "gold_event_type": "Life:Die",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            484.34051513671875,
+            490.5090026855469,
+            1424.300537109375,
+            1829.1690673828125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2013.01.21.1587732_10::VOA_EN_NW_2013.01.21.1587732_2.jpg::Life:Die"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2013.01.21.1587732_10::VOA_EN_NW_2013.01.21.1587732_2.jpg::Life:Die",
+        "gold_event_type": "Life:Die",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "bbox": [
+            721.9415283203125,
+            999.9990234375,
+            2199.767578125,
+            1437.56103515625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2013.01.21.1587732_10::VOA_EN_NW_2013.01.21.1587732_2.jpg::Life:Die"
+        }
+      }
+    ],
+    "image.fp_no_overlap_same_role": [
+      {
+        "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_0.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            1945.0,
+            177.0,
+            3301.0,
+            2569.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            121.80900573730469,
+            92.51300048828125,
+            1656.175048828125,
+            2602.091064453125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_0.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.04.01.3264272_19::VOA_EN_NW_2016.04.01.3264272_2.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            49.0,
+            1115.0,
+            631.0,
+            1793.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            1292.493896484375,
+            1121.095458984375,
+            2067.010009765625,
+            1814.0174560546875
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.04.01.3264272_19::VOA_EN_NW_2016.04.01.3264272_2.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2015.10.21.3017239_45::VOA_EN_NW_2015.10.21.3017239_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            848.0,
+            610.0,
+            1551.0,
+            2669.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            1580.761474609375,
+            794.6184692382812,
+            2285.993408203125,
+            2793.247314453125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.10.21.3017239_45::VOA_EN_NW_2015.10.21.3017239_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2015.10.21.3017239_65::VOA_EN_NW_2015.10.21.3017239_5.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            343.0,
+            70.0,
+            546.0,
+            406.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            76.5,
+            16.4429988861084,
+            327.9000244140625,
+            405.3909912109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.10.21.3017239_65::VOA_EN_NW_2015.10.21.3017239_5.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.05.15.3851683_2::VOA_EN_NW_2017.05.15.3851683_3.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "bbox": [
+            701.0,
+            574.0,
+            2393.0,
+            1050.0
+          ]
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "bbox": [
+            623.3759765625,
+            1165.5360107421875,
+            833.3280029296875,
+            1547.424072265625
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 5,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.05.15.3851683_2::VOA_EN_NW_2017.05.15.3851683_3.jpg::Movement:Transport"
+        }
+      }
+    ],
+    "image.fp_spurious_argument": [
+      {
+        "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": null,
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            732.530029296875,
+            1120.625,
+            886.4140014648438,
+            1607.9949951171875
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.07.14.3417836_18::VOA_EN_NW_2016.07.14.3417836_2.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": null,
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            2077.25,
+            864.7470703125,
+            2140.25,
+            951.1050415039062
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.14.3417836_18::VOA_EN_NW_2016.07.14.3417836_2.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.03.20.3242323_6::VOA_EN_NW_2016.03.20.3242323_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": null,
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            1331.0,
+            1027.9150390625,
+            3016.199951171875,
+            3005.485107421875
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.03.20.3242323_6::VOA_EN_NW_2016.03.20.3242323_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.03.20.3242323_6::VOA_EN_NW_2016.03.20.3242323_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": null,
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            2382.60009765625,
+            1545.635009765625,
+            2743.400146484375,
+            1729.2449951171875
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.03.20.3242323_6::VOA_EN_NW_2016.03.20.3242323_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2015.10.21.3017239_55::VOA_EN_NW_2015.10.21.3017239_4.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": null,
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            54.52800369262695,
+            7.94249963760376,
+            340.73602294921875,
+            201.0334930419922
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.10.21.3017239_55::VOA_EN_NW_2015.10.21.3017239_4.jpg::Conflict:Attack"
+        }
+      }
+    ],
+    "image.fp_weak_overlap_same_role": [
+      {
+        "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            250.0,
+            191.0,
+            846.0,
+            1630.0
+          ]
+        },
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            669.2900390625,
+            222.4949951171875,
+            1358.6060791015625,
+            1627.5550537109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_1.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            3821.0,
+            1322.0,
+            4182.0,
+            2322.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            4149.79638671875,
+            1313.81103515625,
+            4672.939453125,
+            2350.947021484375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_1.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_1.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            3347.0,
+            1230.0,
+            3786.0,
+            2265.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            2.3564999103546143,
+            1000.7730102539062,
+            4705.93017578125,
+            2350.947021484375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_1.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_1.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            3347.0,
+            1230.0,
+            3786.0,
+            2265.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            2.3564999103546143,
+            1000.7730102539062,
+            4705.93017578125,
+            3157.2568359375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 4,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.14.3417836_5::VOA_EN_NW_2016.07.14.3417836_1.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.04.01.3264272_19::VOA_EN_NW_2016.04.01.3264272_2.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "bbox": [
+            2558.0,
+            1103.0,
+            3222.0,
+            1842.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "bbox": [
+            1.6339999437332153,
+            1.0894999504089355,
+            3263.097900390625,
+            2175.7314453125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.04.01.3264272_19::VOA_EN_NW_2016.04.01.3264272_2.jpg::Contact:Meet"
+        }
+      }
+    ],
+    "image.fp_wrong_role_correct_box": [
+      {
+        "sample_id": "VOA_EN_NW_2016.12.28.3654650_8::VOA_EN_NW_2016.12.28.3654650_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "bbox": [
+            371.0,
+            542.0,
+            2300.0,
+            4134.0
+          ]
+        },
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            374.1875,
+            518.8169555664062,
+            2296.014404296875,
+            4127.798828125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.12.28.3654650_8::VOA_EN_NW_2016.12.28.3654650_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.01.30.3699085_18::VOA_EN_NW_2017.01.30.3699085_3.jpg::Contact:Phone-Write",
+        "gold_event_type": "Contact:Phone-Write",
+        "predicted_event_type": "Contact:Phone-Write",
+        "gold": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Entity",
+          "raw_role": "Entity",
+          "bbox": [
+            11.0,
+            3.0,
+            2499.0,
+            2333.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1.75,
+            1.1664999723434448,
+            2507.75,
+            2329.50048828125
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 1,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.01.30.3699085_18::VOA_EN_NW_2017.01.30.3699085_3.jpg::Contact:Phone-Write"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.01.30.3699085_18::VOA_EN_NW_2017.01.30.3699085_0.jpg::Contact:Phone-Write",
+        "gold_event_type": "Contact:Phone-Write",
+        "predicted_event_type": "Contact:Phone-Write",
+        "gold": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Entity",
+          "raw_role": "Entity",
+          "bbox": [
+            1.0,
+            906.0,
+            1063.0,
+            2152.0
+          ]
+        },
+        "pred": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            2.565500020980835,
+            911.6964721679688,
+            1049.28955078125,
+            2276.675537109375
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 1,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.01.30.3699085_18::VOA_EN_NW_2017.01.30.3699085_0.jpg::Contact:Phone-Write"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.07.10.3936006_10::VOA_EN_NW_2017.07.10.3936006_2.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Target",
+          "raw_role": "Target",
+          "bbox": [
+            1.0,
+            599.0,
+            2482.0,
+            1667.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Attacker",
+          "raw_role": "Attacker",
+          "bbox": [
+            1.25,
+            697.6395263671875,
+            2496.25,
+            1664.49951171875
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.07.10.3936006_10::VOA_EN_NW_2017.07.10.3936006_2.jpg::Conflict:Attack"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.07.10.3936006_10::VOA_EN_NW_2017.07.10.3936006_2.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Target",
+          "raw_role": "Target",
+          "bbox": [
+            1.0,
+            599.0,
+            2482.0,
+            1667.0
+          ]
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "bbox": [
+            1.25,
+            694.3055419921875,
+            2496.25,
+            1664.49951171875
+          ]
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.07.10.3936006_10::VOA_EN_NW_2017.07.10.3936006_2.jpg::Conflict:Attack"
+        }
+      }
+    ],
+    "text.fn_boundary_error_same_role": [
+      {
+        "sample_id": "VOA_EN_NW_2015.10.21.3017239_65::VOA_EN_NW_2015.10.21.3017239_5.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "start": 3,
+          "end": 5
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "start": 4,
+          "end": 5
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.10.21.3017239_65::VOA_EN_NW_2015.10.21.3017239_5.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.11.06.3583381_25::VOA_EN_NW_2016.11.06.3583381_4.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Place",
+          "raw_role": "Place",
+          "start": 14,
+          "end": 16
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Place",
+          "raw_role": "Place",
+          "start": 15,
+          "end": 16
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.11.06.3583381_25::VOA_EN_NW_2016.11.06.3583381_4.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2015.07.31.2888384_34::VOA_EN_NW_2015.07.31.2888384_5.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "start": 14,
+          "end": 16
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "start": 15,
+          "end": 16
+        },
+        "trace": {
+          "stage_c_candidate_count": 1,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.07.31.2888384_34::VOA_EN_NW_2015.07.31.2888384_5.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.15.3902402_26::VOA_EN_NW_2017.06.15.3902402_3.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 3,
+          "end": 5
+        },
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 4,
+          "end": 5
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.15.3902402_26::VOA_EN_NW_2017.06.15.3902402_3.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.05.13.3328601_20::VOA_EN_NW_2016.05.13.3328601_0.jpg::Life:Die",
+        "gold_event_type": "Life:Die",
+        "predicted_event_type": "Life:Die",
+        "gold": {
+          "event_type": "Life:Die",
+          "role": "Victim",
+          "raw_role": "Victim",
+          "start": 9,
+          "end": 11
+        },
+        "pred": {
+          "event_type": "Life:Die",
+          "role": "Victim",
+          "raw_role": "Victim",
+          "start": 10,
+          "end": 11
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.05.13.3328601_20::VOA_EN_NW_2016.05.13.3328601_0.jpg::Life:Die"
+        }
+      }
+    ],
+    "text.fn_due_to_missing_event_type": [
+      {
+        "sample_id": "VOA_EN_NW_2016.12.14.3635692_11::VOA_EN_NW_2016.12.14.3635692_3.jpg::Contact:Phone-Write",
+        "gold_event_type": "Contact:Phone-Write",
+        "predicted_event_type": "",
+        "gold": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Entity",
+          "raw_role": "Entity",
+          "start": 11,
+          "end": 13
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 0,
+          "has_stage_c_candidate": false,
+          "grounding_attempted": false,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.12.14.3635692_11::VOA_EN_NW_2016.12.14.3635692_3.jpg::Contact:Phone-Write"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.12.14.3635692_11::VOA_EN_NW_2016.12.14.3635692_3.jpg::Contact:Phone-Write",
+        "gold_event_type": "Contact:Phone-Write",
+        "predicted_event_type": "",
+        "gold": {
+          "event_type": "Contact:Phone-Write",
+          "role": "Place",
+          "raw_role": "Place",
+          "start": 18,
+          "end": 19
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 0,
+          "has_stage_c_candidate": false,
+          "grounding_attempted": false,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.12.14.3635692_11::VOA_EN_NW_2016.12.14.3635692_3.jpg::Contact:Phone-Write"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.12.14.3635692_14::VOA_EN_NW_2016.12.14.3635692_4.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Place",
+          "raw_role": "Place",
+          "start": 24,
+          "end": 25
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 0,
+          "has_stage_c_candidate": false,
+          "grounding_attempted": false,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.12.14.3635692_14::VOA_EN_NW_2016.12.14.3635692_4.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.12.14.3635692_14::VOA_EN_NW_2016.12.14.3635692_4.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "start": 4,
+          "end": 6
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 0,
+          "has_stage_c_candidate": false,
+          "grounding_attempted": false,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.12.14.3635692_14::VOA_EN_NW_2016.12.14.3635692_4.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.10.31.3572766_9::VOA_EN_NW_2016.10.31.3572766_2.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "start": 2,
+          "end": 4
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 0,
+          "has_stage_c_candidate": false,
+          "grounding_attempted": false,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.10.31.3572766_9::VOA_EN_NW_2016.10.31.3572766_2.jpg::Contact:Meet"
+        }
+      }
+    ],
+    "text.fn_missing_argument": [
+      {
+        "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Person",
+          "raw_role": "Person",
+          "start": 6,
+          "end": 7
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 3,
+          "end": 4
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.07.14.3417836_18::VOA_EN_NW_2016.07.14.3417836_2.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Place",
+          "raw_role": "Place",
+          "start": 10,
+          "end": 11
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.14.3417836_18::VOA_EN_NW_2016.07.14.3417836_2.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Place",
+          "raw_role": "Place",
+          "start": 27,
+          "end": 28
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.12.28.3654650_8::VOA_EN_NW_2016.12.28.3654650_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 5,
+          "end": 6
+        },
+        "pred": null,
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.12.28.3654650_8::VOA_EN_NW_2016.12.28.3654650_1.jpg::Justice:Arrest-Jail"
+        }
+      }
+    ],
+    "text.fn_wrong_role_same_span": [
+      {
+        "sample_id": "VOA_EN_NW_2015.07.31.2889903_14::VOA_EN_NW_2015.07.31.2889903_2.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 8,
+          "end": 9
+        },
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Place",
+          "raw_role": "Place",
+          "start": 8,
+          "end": 9
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.07.31.2889903_14::VOA_EN_NW_2015.07.31.2889903_2.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.06.26.3392569_9::VOA_EN_NW_2016.06.26.3392569_1.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "start": 1,
+          "end": 2
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 1,
+          "end": 2
+        },
+        "trace": {
+          "stage_c_candidate_count": 5,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.06.26.3392569_9::VOA_EN_NW_2016.06.26.3392569_1.jpg::Movement:Transport"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.06.26.3392569_27::VOA_EN_NW_2016.06.26.3392569_3.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "start": 2,
+          "end": 3
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 2,
+          "end": 3
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.06.26.3392569_27::VOA_EN_NW_2016.06.26.3392569_3.jpg::Movement:Transport"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.06.15.3376757_15::VOA_EN_NW_2016.06.15.3376757_2.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "start": 2,
+          "end": 3
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Origin",
+          "raw_role": "Origin",
+          "start": 2,
+          "end": 3
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.06.15.3376757_15::VOA_EN_NW_2016.06.15.3376757_2.jpg::Movement:Transport"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_7::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Target",
+          "raw_role": "Target",
+          "start": 29,
+          "end": 30
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "start": 29,
+          "end": 30
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_7::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack"
+        }
+      }
+    ],
+    "text.fp_boundary_error_same_role": [
+      {
+        "sample_id": "VOA_EN_NW_2015.10.21.3017239_65::VOA_EN_NW_2015.10.21.3017239_5.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "start": 3,
+          "end": 5
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "start": 4,
+          "end": 5
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.10.21.3017239_65::VOA_EN_NW_2015.10.21.3017239_5.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.11.06.3583381_25::VOA_EN_NW_2016.11.06.3583381_4.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Place",
+          "raw_role": "Place",
+          "start": 14,
+          "end": 16
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Place",
+          "raw_role": "Place",
+          "start": 15,
+          "end": 16
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.11.06.3583381_25::VOA_EN_NW_2016.11.06.3583381_4.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2015.07.31.2888384_34::VOA_EN_NW_2015.07.31.2888384_5.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Entity",
+          "start": 14,
+          "end": 16
+        },
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "start": 15,
+          "end": 16
+        },
+        "trace": {
+          "stage_c_candidate_count": 1,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.07.31.2888384_34::VOA_EN_NW_2015.07.31.2888384_5.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.15.3902402_26::VOA_EN_NW_2017.06.15.3902402_3.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 3,
+          "end": 5
+        },
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 4,
+          "end": 5
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.15.3902402_26::VOA_EN_NW_2017.06.15.3902402_3.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.05.13.3328601_20::VOA_EN_NW_2016.05.13.3328601_0.jpg::Life:Die",
+        "gold_event_type": "Life:Die",
+        "predicted_event_type": "Life:Die",
+        "gold": {
+          "event_type": "Life:Die",
+          "role": "Victim",
+          "raw_role": "Victim",
+          "start": 9,
+          "end": 11
+        },
+        "pred": {
+          "event_type": "Life:Die",
+          "role": "Victim",
+          "raw_role": "Victim",
+          "start": 10,
+          "end": 11
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.05.13.3328601_20::VOA_EN_NW_2016.05.13.3328601_0.jpg::Life:Die"
+        }
+      }
+    ],
+    "text.fp_due_to_wrong_event_type": [
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 8,
+          "end": 9
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Destination",
+          "raw_role": "Destination",
+          "start": 25,
+          "end": 26
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Origin",
+          "raw_role": "Origin",
+          "start": 25,
+          "end": 26
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2013.01.21.1587732_10::VOA_EN_NW_2013.01.21.1587732_2.jpg::Life:Die",
+        "gold_event_type": "Life:Die",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 1,
+          "end": 2
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2013.01.21.1587732_10::VOA_EN_NW_2013.01.21.1587732_2.jpg::Life:Die"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2013.01.21.1587732_10::VOA_EN_NW_2013.01.21.1587732_2.jpg::Life:Die",
+        "gold_event_type": "Life:Die",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "start": 4,
+          "end": 5
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2013.01.21.1587732_10::VOA_EN_NW_2013.01.21.1587732_2.jpg::Life:Die"
+        }
+      }
+    ],
+    "text.fp_spurious_argument": [
+      {
+        "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": null,
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 2,
+          "end": 3
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": null,
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Person",
+          "raw_role": "Person",
+          "start": 6,
+          "end": 7
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.11.26.3074855_5::VOA_EN_NW_2015.11.26.3074855_1.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.07.14.3417836_18::VOA_EN_NW_2016.07.14.3417836_2.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": null,
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 7,
+          "end": 8
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.07.14.3417836_18::VOA_EN_NW_2016.07.14.3417836_2.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.04.01.3264272_19::VOA_EN_NW_2016.04.01.3264272_2.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Contact:Meet",
+        "gold": null,
+        "pred": {
+          "event_type": "Contact:Meet",
+          "role": "Participant",
+          "raw_role": "Participant",
+          "start": 1,
+          "end": 3
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.04.01.3264272_19::VOA_EN_NW_2016.04.01.3264272_2.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2015.07.31.2889903_14::VOA_EN_NW_2015.07.31.2889903_2.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": null,
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 1,
+          "end": 2
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.07.31.2889903_14::VOA_EN_NW_2015.07.31.2889903_2.jpg::Justice:Arrest-Jail"
+        }
+      }
+    ],
+    "text.fp_wrong_role_same_span": [
+      {
+        "sample_id": "VOA_EN_NW_2015.07.31.2889903_14::VOA_EN_NW_2015.07.31.2889903_2.jpg::Justice:Arrest-Jail",
+        "gold_event_type": "Justice:Arrest-Jail",
+        "predicted_event_type": "Justice:Arrest-Jail",
+        "gold": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 8,
+          "end": 9
+        },
+        "pred": {
+          "event_type": "Justice:Arrest-Jail",
+          "role": "Place",
+          "raw_role": "Place",
+          "start": 8,
+          "end": 9
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2015.07.31.2889903_14::VOA_EN_NW_2015.07.31.2889903_2.jpg::Justice:Arrest-Jail"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.06.26.3392569_9::VOA_EN_NW_2016.06.26.3392569_1.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "start": 1,
+          "end": 2
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 1,
+          "end": 2
+        },
+        "trace": {
+          "stage_c_candidate_count": 5,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.06.26.3392569_9::VOA_EN_NW_2016.06.26.3392569_1.jpg::Movement:Transport"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.06.26.3392569_27::VOA_EN_NW_2016.06.26.3392569_3.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "start": 2,
+          "end": 3
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 2,
+          "end": 3
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.06.26.3392569_27::VOA_EN_NW_2016.06.26.3392569_3.jpg::Movement:Transport"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.06.15.3376757_15::VOA_EN_NW_2016.06.15.3376757_2.jpg::Movement:Transport",
+        "gold_event_type": "Movement:Transport",
+        "predicted_event_type": "Movement:Transport",
+        "gold": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "start": 2,
+          "end": 3
+        },
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Origin",
+          "raw_role": "Origin",
+          "start": 2,
+          "end": 3
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.06.15.3376757_15::VOA_EN_NW_2016.06.15.3376757_2.jpg::Movement:Transport"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2017.06.21.3910361_7::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack",
+        "gold_event_type": "Conflict:Attack",
+        "predicted_event_type": "Conflict:Attack",
+        "gold": {
+          "event_type": "Conflict:Attack",
+          "role": "Target",
+          "raw_role": "Target",
+          "start": 29,
+          "end": 30
+        },
+        "pred": {
+          "event_type": "Conflict:Attack",
+          "role": "Instrument",
+          "raw_role": "Instrument",
+          "start": 29,
+          "end": 30
+        },
+        "trace": {
+          "stage_c_candidate_count": 2,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2017.06.21.3910361_7::VOA_EN_NW_2017.06.21.3910361_0.jpg::Conflict:Attack"
+        }
+      }
+    ],
+    "text.pred_role_outside_gold_schema_union": [
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Agent",
+          "raw_role": "Agent",
+          "start": 8,
+          "end": 9
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Destination",
+          "raw_role": "Destination",
+          "start": 25,
+          "end": 26
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet",
+        "gold_event_type": "Contact:Meet",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Origin",
+          "raw_role": "Origin",
+          "start": 25,
+          "end": 26
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2016.02.10.3184811_28::VOA_EN_NW_2016.02.10.3184811_3.jpg::Contact:Meet"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2013.01.21.1587732_10::VOA_EN_NW_2013.01.21.1587732_2.jpg::Life:Die",
+        "gold_event_type": "Life:Die",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Artifact",
+          "raw_role": "Artifact",
+          "start": 4,
+          "end": 5
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2013.01.21.1587732_10::VOA_EN_NW_2013.01.21.1587732_2.jpg::Life:Die"
+        }
+      },
+      {
+        "sample_id": "VOA_EN_NW_2013.01.21.1587732_10::VOA_EN_NW_2013.01.21.1587732_2.jpg::Life:Die",
+        "gold_event_type": "Life:Die",
+        "predicted_event_type": "Movement:Transport",
+        "gold": null,
+        "pred": {
+          "event_type": "Movement:Transport",
+          "role": "Destination",
+          "raw_role": "Destination",
+          "start": 23,
+          "end": 25
+        },
+        "trace": {
+          "stage_c_candidate_count": 3,
+          "has_stage_c_candidate": true,
+          "grounding_attempted": true,
+          "verifier_verdict": null
+        },
+        "metrics": {
+          "sample_id": "VOA_EN_NW_2013.01.21.1587732_10::VOA_EN_NW_2013.01.21.1587732_2.jpg::Life:Die"
+        }
+      }
+    ]
+  },
+  "num_records": 309,
+  "iou_threshold": 0.5,
+  "iou_low": 0.2,
+  "cover_high": 0.8,
+  "purity_low": 0.6
+}
